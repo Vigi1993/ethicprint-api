@@ -227,7 +227,16 @@ def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3)
     def total_score(b):
         return (b["score_armi"] + b["score_ambiente"] + b["score_diritti"] + b["score_fisco"]) / 4
 
-    brands_sorted = sorted(brands, key=total_score, reverse=True)[:top_n]
+    # Calcola score del brand corrente per confronto
+    current_res = supabase.table("brands")        .select("score_armi, score_ambiente, score_diritti, score_fisco")        .eq("id", brand_id).limit(1).execute()
+    current_score = 0
+    if current_res.data:
+        c = current_res.data[0]
+        current_score = (c["score_armi"] + c["score_ambiente"] + c["score_diritti"] + c["score_fisco"]) / 4
+
+    # Ritorna solo brand con score più alto del brand corrente
+    better = [b for b in brands if total_score(b) > current_score]
+    brands_sorted = sorted(better, key=total_score, reverse=True)[:top_n]
 
     result = []
     for b in brands_sorted:
