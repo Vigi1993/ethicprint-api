@@ -92,7 +92,7 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
             "fisco": brand["note_fisco"],
         },
         "sources": grouped_sources,
-        "alternatives": brand["alternatives"] or [],
+        "alternatives": [],  # populated by get_brand via smart_alternatives()
         "last_updated": brand["last_updated"],
     }
 
@@ -217,6 +217,31 @@ def get_brands(
     return [format_brand(b, lang=lang) for b in brands]
 
 
+
+def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3) -> list:
+    """Ritorna i top N brand dello stesso settore per score, escluso il brand stesso."""
+    res = supabase.table("brands")        .select("id, name, logo, score_armi, score_ambiente, score_diritti, score_fisco, sectors(key, label, label_en, icon)")        .eq("sector_id", sector_id)        .neq("id", brand_id)        .execute()
+
+    brands = res.data or []
+
+    def total_score(b):
+        return (b["score_armi"] + b["score_ambiente"] + b["score_diritti"] + b["score_fisco"]) / 4
+
+    brands_sorted = sorted(brands, key=total_score, reverse=True)[:top_n]
+
+    result = []
+    for b in brands_sorted:
+        sector = b.get("sectors") or {}
+        sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
+        result.append({
+            "id": b["id"],
+            "name": b["name"],
+            "logo": b["logo"],
+            "score": round(total_score(b)),
+            "sector": sector_label,
+        })
+    return result
+
 @app.get("/brands/{brand_id}")
 async def get_brand(
     brand_id: int,
@@ -253,7 +278,11 @@ async def get_brand(
                 lang
             )
 
-    return format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
+    formatted = format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
+    sector_id = brand_res.data.get("sector_id")
+    if sector_id:
+        formatted["alternatives"] = smart_alternatives(brand_id, sector_id, lang)
+    return formatted
 
 
 @app.get("/sectors")
