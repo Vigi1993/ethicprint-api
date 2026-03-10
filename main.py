@@ -52,7 +52,7 @@ def apply_translation(brand: dict, translation: dict) -> dict:
     return brand
 
 
-def format_brand(brand: dict, sources: list = [], translation: dict = None) -> dict:
+def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
     """Trasforma una riga del DB nel formato usato dal frontend."""
     if translation:
         brand = apply_translation(dict(brand), translation)
@@ -70,10 +70,11 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None) -> d
             "published_at": s["published_at"],
         })
 
+    sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
     return {
         "id": brand["id"],
         "name": brand["name"],
-        "sector": sector.get("label", ""),
+        "sector": sector_label,
         "sector_key": sector.get("key", ""),
         "sector_icon": sector.get("icon", ""),
         "logo": brand["logo"],
@@ -190,7 +191,7 @@ def get_brands(
     """Ritorna tutti i brand. Supporta ?lang=it per le traduzioni."""
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
 
-    query = supabase.table("brands").select("*, sectors(key, label, icon)")
+    query = supabase.table("brands").select("*, sectors(key, label, label_en, icon)")
 
     if sector:
         sector_res = supabase.table("sectors").select("id").eq("key", sector).single().execute()
@@ -211,9 +212,9 @@ def get_brands(
             .eq("lang", lang)\
             .execute()
         translations = {t["brand_id"]: t for t in (translations_res.data or [])}
-        return [format_brand(b, translation=translations.get(b["id"])) for b in brands]
+        return [format_brand(b, translation=translations.get(b["id"]), lang=lang) for b in brands]
 
-    return [format_brand(b) for b in brands]
+    return [format_brand(b, lang=lang) for b in brands]
 
 
 @app.get("/brands/{brand_id}")
@@ -227,7 +228,7 @@ async def get_brand(
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
 
     brand_res = supabase.table("brands")\
-        .select("*, sectors(key, label, icon)")\
+        .select("*, sectors(key, label, label_en, icon)")\
         .eq("id", brand_id)\
         .single()\
         .execute()
@@ -252,7 +253,7 @@ async def get_brand(
                 lang
             )
 
-    return format_brand(brand_res.data, sources_res.data or [], translation)
+    return format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
 
 
 @app.get("/sectors")
