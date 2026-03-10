@@ -70,21 +70,6 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
 
     sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
 
-    # Confidence per categoria basato sul numero di fonti per ognuna
-    def conf_level(n):
-        if n >= 3: return "high"
-        if n == 2: return "medium"
-        return "low"
-
-    confidence = {
-        key: conf_level(len(grouped_sources.get(key, [])))
-        for key in ["armi", "ambiente", "diritti", "fisco"]
-    }
-    source_count = {
-        key: len(grouped_sources.get(key, []))
-        for key in ["armi", "ambiente", "diritti", "fisco"]
-    }
-
     return {
         "id": brand["id"],
         "name": brand["name"],
@@ -107,8 +92,6 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         },
         "sources": grouped_sources,
         "alternatives": [],  # populated by smart_alternatives()
-        "confidence": confidence,
-        "source_count": source_count,
         "last_updated": brand["last_updated"],
     }
 
@@ -302,6 +285,20 @@ async def get_brand(
             )
 
     formatted = format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
+
+    # Confidence per categoria — calcolato qui dove abbiamo le sources
+    def conf_level(n):
+        if n >= 3: return {"level": "high", "label_en": "High confidence", "label_it": "Alta affidabilità"}
+        if n == 2: return {"level": "medium", "label_en": "Medium confidence", "label_it": "Attendibilità media"}
+        if n == 1: return {"level": "low", "label_en": "Low confidence", "label_it": "Bassa affidabilità"}
+        return {"level": "none", "label_en": "No sources yet", "label_it": "Nessuna fonte"}
+
+    sources_by_cat = formatted.get("sources", {})
+    formatted["confidence"] = {
+        key: {**conf_level(len(sources_by_cat.get(key, []))), "count": len(sources_by_cat.get(key, []))}
+        for key in ["armi", "ambiente", "diritti", "fisco"]
+    }
+
     sector_id = brand_res.data.get("sector_id")
     if sector_id:
         formatted["alternatives"] = smart_alternatives(brand_id, sector_id, lang)
