@@ -47,8 +47,6 @@ def apply_translation(brand: dict, translation: dict) -> dict:
         brand["note_diritti"] = translation["note_diritti"]
     if translation.get("note_fisco"):
         brand["note_fisco"] = translation["note_fisco"]
-    if translation.get("alternatives"):
-        brand["alternatives"] = translation["alternatives"]
     return brand
 
 
@@ -92,7 +90,7 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
             "fisco": brand["note_fisco"],
         },
         "sources": grouped_sources,
-        "alternatives": [],  # populated by get_brand via smart_alternatives()
+        "alternatives": [],  # populated by smart_alternatives()
         "last_updated": brand["last_updated"],
     }
 
@@ -125,8 +123,7 @@ async def generate_and_save_translation(brand_id: int, brand: dict, lang: str):
     lang_name = lang_names.get(lang, lang)
 
     prompt = f"""Translate the following ethical brand assessment notes from English to {lang_name}.
-Return ONLY a valid JSON object with these exact keys: note_armi, note_ambiente, note_diritti, note_fisco, alternatives.
-alternatives must be a JSON array of strings.
+Return ONLY a valid JSON object with these exact keys: note_armi, note_ambiente, note_diritti, note_fisco.
 Keep the tone factual and neutral. Do not add or remove information.
 
 Brand: {brand["name"]}
@@ -135,7 +132,7 @@ note_armi: {brand["note_armi"]}
 note_ambiente: {brand["note_ambiente"]}
 note_diritti: {brand["note_diritti"]}
 note_fisco: {brand["note_fisco"]}
-alternatives: {json.dumps(brand["alternatives"] or [])}"""
+"""
 
     try:
         async with httpx.AsyncClient() as client:
@@ -168,7 +165,6 @@ alternatives: {json.dumps(brand["alternatives"] or [])}"""
             "note_ambiente": translated.get("note_ambiente"),
             "note_diritti": translated.get("note_diritti"),
             "note_fisco": translated.get("note_fisco"),
-            "alternatives": translated.get("alternatives", []),
         }, on_conflict="brand_id,lang").execute()
 
     except Exception as e:
