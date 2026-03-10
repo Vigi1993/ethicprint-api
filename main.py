@@ -105,10 +105,13 @@ def get_translation(brand_id: int, lang: str) -> dict | None:
             .select("*")\
             .eq("brand_id", brand_id)\
             .eq("lang", lang)\
-            .single()\
+            .limit(1)\
             .execute()
-        return res.data
-    except Exception:
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+        return None
+    except Exception as e:
+        print(f"get_translation error brand_id={brand_id} lang={lang}: {e}")
         return None
 
 
