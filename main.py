@@ -70,14 +70,20 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
 
     sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
 
-    # Confidence score basato sul numero totale di fonti
-    total_sources = sum(len(v) for v in grouped_sources.values())
-    if total_sources >= 6:
-        confidence = "high"
-    elif total_sources >= 3:
-        confidence = "medium"
-    else:
-        confidence = "low"
+    # Confidence per categoria basato sul numero di fonti per ognuna
+    def conf_level(n):
+        if n >= 3: return "high"
+        if n == 2: return "medium"
+        return "low"
+
+    confidence = {
+        key: conf_level(len(grouped_sources.get(key, [])))
+        for key in ["armi", "ambiente", "diritti", "fisco"]
+    }
+    source_count = {
+        key: len(grouped_sources.get(key, []))
+        for key in ["armi", "ambiente", "diritti", "fisco"]
+    }
 
     return {
         "id": brand["id"],
@@ -102,7 +108,7 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         "sources": grouped_sources,
         "alternatives": [],  # populated by smart_alternatives()
         "confidence": confidence,
-        "source_count": total_sources,
+        "source_count": source_count,
         "last_updated": brand["last_updated"],
     }
 
