@@ -24,54 +24,40 @@ DEFAULT_LANG = "en"
 # Tier 2 = testate nazionali, report ufficiali, dati governativi (peso 2)
 # Tier 3 = blog, fonti minori, non verificate (peso 1)
 
-TIER1_PUBLISHERS = {
-    # Diritti umani
-    "amnesty international", "human rights watch", "hrw",
-    # Ambiente
-    "cdp", "carbon disclosure project", "wwf", "greenpeace",
-    "ipcc", "unfccc",
-    # Armi / conflitti
-    "sipri", "stockholm international peace research institute",
-    "the intercept", "pax", "campaign against arms trade",
-    # Fisco
-    "tax justice network", "oxfam", "transparency international",
-    # Media internazionali di riferimento
-    "the guardian", "new york times", "nyt", "reuters", "bbc",
-    "le monde", "der spiegel", "the washington post",
-    # Report settoriali
-    "knowthechain", "corporate human rights benchmark",
-    "global witness", "bureau of investigative journalism",
-}
-
-TIER2_PUBLISHERS = {
-    # Media nazionali affidabili (IT)
-    "corriere della sera", "la repubblica", "il sole 24 ore",
-    "la stampa", "espresso", "internazionale", "valori",
-    # Media nazionali affidabili (altri paesi)
-    "financial times", "bloomberg", "the economist",
-    "le figaro", "el pais", "frankfurter allgemeine",
-    # Fonti istituzionali
-    "european parliament", "european commission",
-    "parlamento europeo", "commissione europea",
-    "oecd", "ocse", "world bank", "banca mondiale",
-    "istat", "eurostat",
-    # Report aziendali ufficiali / certificazioni
-    "b corp", "bcorporation", "iso", "fsc",
-}
-
 TIER_WEIGHTS = {1: 3, 2: 2, 3: 1}
 
+# Cache publishers from DB (refreshed every hour)
+_publishers_cache: dict = {}
+_publishers_cache_time: float = 0
+
+def _load_publishers() -> dict:
+    """Carica i publisher dal DB e li mette in cache per 1 ora."""
+    import time
+    global _publishers_cache, _publishers_cache_time
+    now = time.time()
+    if _publishers_cache and (now - _publishers_cache_time) < 3600:
+        return _publishers_cache
+    try:
+        res = supabase.table("publishers").select("name, tier").eq("active", True).execute()
+        cache = {}
+        for row in (res.data or []):
+            cache[row["name"].lower().strip()] = row["tier"]
+        _publishers_cache = cache
+        _publishers_cache_time = now
+    except Exception as e:
+        print(f"Publishers cache load failed: {e}")
+    return _publishers_cache
+
 def detect_tier(publisher: str) -> int:
-    """Assegna il tier in base al publisher. Se non riconosciuto → tier 3."""
+    """Assegna il tier in base al publisher dal DB. Fallback tier 3."""
     if not publisher:
         return 3
     p = publisher.lower().strip()
-    for t1 in TIER1_PUBLISHERS:
-        if t1 in p:
-            return 1
-    for t2 in TIER2_PUBLISHERS:
-        if t2 in p:
-            return 2
+    publishers = _load_publishers()
+    # Match esatto o parziale (es. "The Guardian" dentro "The Guardian - International")
+    for name, tier in publishers.items():
+        if name in p or p in name:
+            return tier
     return 3
 
 def weighted_confidence(sources: list) -> dict:
@@ -475,6 +461,19 @@ def suggest_brand(payload: dict):
     return {
         "message": "Thanks for the suggestion! It will be reviewed by Marco.",
         "brand": payload.get("name")
+    }
+
+
+@app.get("/publishers")
+def get_publishers():
+    """Ritorna tutti i publisher trusted, divisi per tier."""
+    res = supabase.table("publishers")        .select("id, name, url, tier, topic")        .eq("active", True)        .order("tier")        .order("name")        .execute()
+    data = res.data or []
+    return {
+        "total": len(data),
+        "tier1": [p for p in data if p["tier"] == 1],
+        "tier2": [p for p in data if p["tier"] == 2],
+        "tier3": [p for p in data if p["tier"] == 3],
     }
 
 
