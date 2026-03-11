@@ -671,20 +671,63 @@ def get_score_proposals(status: str = "pending"):
 
 @app.post("/score-proposals/{proposal_id}/approve")
 def approve_score_proposal(proposal_id: int):
-    """Approva una proposta di score: aggiorna il punteggio nel brand."""
+    """
+    Approva una proposta di score per una singola voce.
+    Scrive/aggiorna brand_scores, poi ricalcola il punteggio aggregato
+    della categoria in brands.score_*.
+    """
     prop_res = supabase.table("score_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
         raise HTTPException(status_code=404, detail="Proposal not found")
     p = prop_res.data
 
+    criterion_id = p.get("criterion_id")
+    if not criterion_id:
+        raise HTTPException(status_code=400, detail="Proposal has no criterion_id — legacy proposal not supported")
+
+    # Upsert in brand_scores
+    supabase.table("brand_scores").upsert({
+        "brand_id": p["brand_id"],
+        "criterion_id": criterion_id,
+        "score": p["proposed_score"],
+        "label_en": p.get("proposed_label_en", ""),
+        "label_it": p.get("proposed_label_it", ""),
+        "notes": p.get("motivation", ""),
+        "source_ids": [p["source_id"]] if p.get("source_id") else [],
+        "status": "published",
+        "last_updated": "now()",
+    }, on_conflict="brand_id,criterion_id").execute()
+
+    # Ricalcola score aggregato della categoria
+    # Prende tutte le voci published della categoria per questo brand
+    criteria_res = supabase.table("scoring_criteria")        .select("id")        .eq("category_key", p["category_key"])        .eq("active", True)        .execute()
+    criterion_ids = [c["id"] for c in (criteria_res.data or [])]
+
+    scores_res = supabase.table("brand_scores")        .select("score")        .eq("brand_id", p["brand_id"])        .eq("status", "published")        .in_("criterion_id", criterion_ids)        .execute()
+
+    scores = [row["score"] for row in (scores_res.data or [])]
+
+    if scores:
+        # Media delle voci con evidenza (esclude voci mancanti = 3 neutro non pubblicato)
+        # Converti scala 1-5 in 0-25: (media - 1) / 4 * 25
+        avg = sum(scores) / len(scores)
+        category_score = round((avg - 1) / 4 * 25)
+    else:
+        category_score = 13  # neutro se nessuna voce pubblicata
+
     col = f"score_{p['category_key']}"
     supabase.table("brands").update({
-        col: p["proposed_score"],
+        col: category_score,
         "last_updated": "now()"
     }).eq("id", p["brand_id"]).execute()
 
     supabase.table("score_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
-    return {"message": f"Score updated: {p['category_key']} → {p['proposed_score']}"}
+    return {
+        "message": f"Score updated",
+        "category": p["category_key"],
+        "category_score": category_score,
+        "criteria_scored": len(scores),
+    }
 
 
 @app.post("/score-proposals/{proposal_id}/reject")
@@ -692,3 +735,51 @@ def reject_score_proposal(proposal_id: int):
     """Rifiuta una proposta di score."""
     supabase.table("score_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
     return {"message": "Score proposal rejected"}
+
+
+@app.get("/scoring-criteria")
+def get_scoring_criteria():
+    """Ritorna tutti i criteri di valutazione raggruppati per categoria."""
+    res = supabase.table("scoring_criteria")        .select("*")        .eq("active", True)        .order("category_key")        .order("sort_order")        .execute()
+    data = res.data or []
+    grouped = {}
+    for c in data:
+        key = c["category_key"]
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(c)
+    return grouped
+
+
+@app.get("/brands/{brand_id}/scores")
+def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
+    """
+    Ritorna i punteggi voce per voce di un brand.
+    Voci non ancora valutate tornano con score=3 (neutro).
+    """
+    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+
+    criteria_res = supabase.table("scoring_criteria")        .select("*")        .eq("active", True)        .order("category_key")        .order("sort_order")        .execute()
+    all_criteria = criteria_res.data or []
+
+    scores_res = supabase.table("brand_scores")        .select("*")        .eq("brand_id", brand_id)        .eq("status", "published")        .execute()
+    scores_by_criterion = {row["criterion_id"]: row for row in (scores_res.data or [])}
+
+    result = {}
+    for c in all_criteria:
+        key = c["category_key"]
+        if key not in result:
+            result[key] = []
+        s = scores_by_criterion.get(c["id"])
+        label_key = f"label_{lang}" if lang != "en" else "label_en"
+        result[key].append({
+            "criterion_id": c["id"],
+            "code": c["code"],
+            "label": c[label_key] if label_key in c else c["label_en"],
+            "score": s["score"] if s else 3,
+            "label_score": (s[f"label_{lang}"] if s and lang != "en" and s.get(f"label_{lang}") else
+                           s["label_en"] if s else SCORE_LABELS[3]["en"]),
+            "notes": s["notes"] if s else None,
+            "last_updated": s["last_updated"] if s else None,
+        })
+    return result
