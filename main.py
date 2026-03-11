@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, Query
-import asyncio, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 import os
@@ -488,7 +488,7 @@ Reply ONLY with JSON:
 
 
 @app.post("/source-proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: int):
+async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks):
     """Approva una proposta: la inserisce in sources, avvia analisi score."""
     prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
@@ -517,14 +517,15 @@ async def approve_proposal(proposal_id: int):
 
     # Analisi score in background — non blocca la risposta
     if source_id:
-        asyncio.create_task(analyze_source_for_score(
+        background_tasks.add_task(
+            analyze_source_for_score,
             source_id=source_id,
             brand_id=p["brand_id"],
             category_key=p["category_key"],
             url=p["url"],
             title=p.get("title", ""),
             summary=p.get("summary", ""),
-        ))
+        )
 
     return {"message": "Proposal approved. Score analysis started in background."}
 
