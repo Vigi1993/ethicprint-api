@@ -28,20 +28,26 @@ HEADERS = {
 TIMEOUT = 15  # secondi
 
 
-async def fetch_page(client: httpx.AsyncClient, url: str) -> tuple[bool, str | None]:
+async def fetch_page(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:
     """
-    Ritorna (broken, content).
-    broken=True se la pagina non risponde o dà errore tecnico.
-    content=None se broken, altrimenti testo HTML troncato.
+    Ritorna (broken, blocked, content).
+    broken=True solo per 404 o errori di rete reali (pagina sparita).
+    blocked=True per 403/429/503 (sito blocca bot ma la pagina esiste).
+    content=testo HTML troncato se disponibile.
     """
     try:
         r = await client.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+        if r.status_code == 404:
+            return True, False, None  # Pagina davvero sparita
+        if r.status_code in (403, 429, 503):
+            return False, True, None  # Sito blocca bot — non possiamo verificare
         if r.status_code >= 400:
-            return True, None
-        # Tronca a 8000 caratteri per non sprecare token Claude
-        return False, r.text[:8000]
+            return True, False, None  # Altro errore — considera rotto
+        return False, False, r.text[:8000]
+    except httpx.TimeoutException:
+        return True, False, None  # Timeout — considera rotto
     except Exception:
-        return True, None
+        return False, True, None  # Errore generico — non possiamo verificare
 
 
 async def check_content(source: dict, page_content: str) -> bool:
@@ -99,8 +105,13 @@ async def check_source(client: httpx.AsyncClient, source: dict) -> dict:
     url = source.get("url", "")
     print(f"  Checking [{source['id']}] {url[:60]}...")
 
-    broken, content = await fetch_page(client, url)
+    broken, blocked, content = await fetch_page(client, url)
     content_missing = False
+
+    if blocked:
+        # Non possiamo verificare — lasciamo i valori precedenti invariati
+        print(f"    → 🚫 BLOCKED (bot protection — skipping)")
+        return None  # Segnale per saltare l'aggiornamento
 
     if not broken and content:
         content_missing = await check_content(source, content)
@@ -114,7 +125,7 @@ async def check_source(client: httpx.AsyncClient, source: dict) -> dict:
 
     status = "✓ OK"
     if broken:
-        status = "✗ BROKEN"
+        status = "✗ BROKEN (404)"
     elif content_missing:
         status = "⚠ CONTENT MISSING"
     print(f"    → {status}")
@@ -139,6 +150,12 @@ async def run_checker():
             try:
                 checked = await check_source(client, source)
 
+                if checked is None:
+                    # Sito blocca bot — skip, non aggiornare
+                    results["blocked"] = results.get("blocked", 0) + 1
+                    await asyncio.sleep(2)
+                    continue
+
                 # Aggiorna Supabase
                 supabase.table("sources").update({
                     "broken": checked["broken"],
@@ -161,7 +178,7 @@ async def run_checker():
                 results["errors"] += 1
 
     print(f"\n{'='*50}")
-    print(f"DONE — ✓ {results['ok']} OK · ✗ {results['broken']} broken · ⚠ {results['content_missing']} content missing · {results['errors']} errors")
+    print(f"DONE — ✓ {results['ok']} OK · ✗ {results['broken']} broken · ⚠ {results['content_missing']} content missing · 🚫 {results.get('blocked',0)} blocked · {results['errors']} errors")
     print(f"{'='*50}\n")
 
 
