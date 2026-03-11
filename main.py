@@ -1,569 +1,429 @@
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
-import asyncio
-from fastapi.middleware.cors import CORSMiddleware
-from supabase import create_client, Client
-import os
-import json
-import httpx
-from dotenv import load_dotenv
-from typing import Optional
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EthicPrint — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: rgba(255,255,255,0.06);
+    --text: #e8e8f0;
+    --muted: rgba(255,255,255,0.3);
+    --accent: #63cab7;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #facc15;
+    --orange: #fb923c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
 
-load_dotenv()
+  header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10,10,15,0.95); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    display: flex; align-items: center; gap: 24px; height: 56px;
+  }
+  header h1 { font-size: 13px; font-family: 'DM Mono', monospace; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; }
+  .tab { padding: 6px 14px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif; transition: all 0.15s; color: var(--muted); background: transparent; }
+  .tab.active { background: rgba(99,202,183,0.1); border-color: rgba(99,202,183,0.25); color: var(--accent); }
+  .tab:hover:not(.active) { background: rgba(255,255,255,0.04); color: var(--text); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 99px; font-size: 10px; font-weight: 600; padding: 0 5px; margin-left: 6px; }
+  .badge-pending { background: rgba(250,204,21,0.15); color: var(--yellow); }
+  .badge-count { background: rgba(255,255,255,0.08); color: var(--muted); }
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
+  .main { max-width: 900px; margin: 0 auto; padding: 32px 24px 80px; }
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 32px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; }
+  .stat-val { font-size: 28px; font-weight: 600; font-family: 'DM Mono', monospace; line-height: 1; }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
 
-SUPPORTED_LANGS = ["en", "it", "es", "fr", "de"]
-DEFAULT_LANG = "en"
+  .brand-group { margin-bottom: 24px; }
+  .brand-header { display: flex; align-items: center; gap: 10px; padding: 12px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+  .brand-logo { width: 28px; height: 28px; border-radius: 7px; background: rgba(99,202,183,0.1); border: 1px solid rgba(99,202,183,0.2); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+  .brand-name { font-size: 14px; font-weight: 600; }
+  .brand-count { font-size: 11px; color: var(--muted); }
 
-app = FastAPI(
-    title="EthicPrint API",
-    description="API for ethical brand scoring — ethicprint.org",
-    version="2.0.0"
-)
+  .proposal-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 8px; display: flex; gap: 16px; align-items: flex-start;
+    transition: border-color 0.2s;
+  }
+  .proposal-card:hover { border-color: rgba(255,255,255,0.1); }
+  .proposal-card.approved { border-color: rgba(74,222,128,0.2); background: rgba(74,222,128,0.03); }
+  .proposal-card.rejected { border-color: rgba(248,113,113,0.15); background: rgba(248,113,113,0.02); opacity: 0.5; }
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://ethicprint.org", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+  .cat-badge { padding: 3px 9px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; }
+  .cat-armi { background: rgba(248,113,113,0.12); color: #f87171; }
+  .cat-ambiente { background: rgba(74,222,128,0.12); color: #4ade80; }
+  .cat-diritti { background: rgba(99,202,183,0.12); color: #63cab7; }
+  .cat-fisco { background: rgba(250,204,21,0.12); color: #facc15; }
 
+  .proposal-body { flex: 1; min-width: 0; }
+  .proposal-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .proposal-publisher { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .proposal-summary { font-size: 12px; color: rgba(255,255,255,0.45); line-height: 1.5; margin-bottom: 8px; }
+  .proposal-url { font-size: 11px; font-family: 'DM Mono', monospace; color: rgba(99,202,183,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .proposal-url:hover { color: var(--accent); }
+  .proposal-meta { font-size: 10px; color: var(--muted); margin-top: 4px; }
 
-# ─── UTILS ────────────────────────────────────────────────────────────────────
+  .proposal-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .btn { padding: 7px 14px; border-radius: 8px; border: 1px solid; cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif; font-weight: 500; transition: all 0.15s; white-space: nowrap; }
+  .btn-approve { background: rgba(74,222,128,0.1); border-color: rgba(74,222,128,0.25); color: var(--green); }
+  .btn-approve:hover { background: rgba(74,222,128,0.2); }
+  .btn-reject { background: rgba(248,113,113,0.07); border-color: rgba(248,113,113,0.15); color: var(--red); }
+  .btn-reject:hover { background: rgba(248,113,113,0.15); }
+  .btn-open { background: transparent; border-color: var(--border); color: var(--muted); font-size: 11px; padding: 5px 10px; }
+  .btn-open:hover { color: var(--text); border-color: rgba(255,255,255,0.15); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-def apply_translation(brand: dict, translation: dict) -> dict:
-    """Sovrascrive note e alternatives del brand con la traduzione richiesta."""
-    if not translation:
-        return brand
-    if translation.get("note_armi"):
-        brand["note_armi"] = translation["note_armi"]
-    if translation.get("note_ambiente"):
-        brand["note_ambiente"] = translation["note_ambiente"]
-    if translation.get("note_diritti"):
-        brand["note_diritti"] = translation["note_diritti"]
-    if translation.get("note_fisco"):
-        brand["note_fisco"] = translation["note_fisco"]
-    return brand
+  .status-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 500; }
+  .status-approved { background: rgba(74,222,128,0.1); color: var(--green); }
+  .status-rejected { background: rgba(248,113,113,0.1); color: var(--red); }
 
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 14px; }
+  .empty-icon { font-size: 32px; margin-bottom: 12px; }
 
-def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
-    """Trasforma una riga del DB nel formato usato dal frontend."""
-    if translation:
-        brand = apply_translation(dict(brand), translation)
+  .loading { text-align: center; padding: 80px; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 2px; }
 
-    sector = brand.get("sectors") or {}
-    grouped_sources = {}
-    for s in sources:
-        key = s["category_key"]
-        if key not in grouped_sources:
-            grouped_sources[key] = []
-        grouped_sources[key].append({
-            "url": s["url"],
-            "title": s["title"],
-            "publisher": s["publisher"],
-            "published_at": s["published_at"],
-        })
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1a1a28; border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; font-size: 13px; z-index: 999; transition: opacity 0.3s; }
+  .toast.hide { opacity: 0; pointer-events: none; }
 
-    sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 20px; align-items: center; }
+  .filter-bar span { font-size: 11px; color: var(--muted); margin-right: 4px; }
+  .filter-chip { padding: 4px 12px; border-radius: 99px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.15s; }
+  .filter-chip.active { background: rgba(99,202,183,0.1); border-color: rgba(99,202,183,0.25); color: var(--accent); }
 
-    return {
-        "id": brand["id"],
-        "name": brand["name"],
-        "sector": sector_label,
-        "sector_key": sector.get("key", ""),
-        "sector_icon": sector.get("icon", ""),
-        "logo": brand["logo"],
-        "parent": brand["parent"],
-        "scores": {
-            "armi": brand["score_armi"],
-            "ambiente": brand["score_ambiente"],
-            "diritti": brand["score_diritti"],
-            "fisco": brand["score_fisco"],
-        },
-        "notes": {
-            "armi": brand["note_armi"],
-            "ambiente": brand["note_ambiente"],
-            "diritti": brand["note_diritti"],
-            "fisco": brand["note_fisco"],
-        },
-        "sources": grouped_sources,
-        "alternatives": [],  # populated by smart_alternatives()
-        "last_updated": brand["last_updated"],
+  .job-badge { font-size: 9px; padding: 2px 7px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .job-new { background: rgba(99,202,183,0.1); color: var(--accent); }
+  .score-arrow { font-size: 18px; font-weight: 700; font-family: 'DM Mono', monospace; }
+  .score-up { color: var(--green); }
+  .score-down { color: var(--red); }
+  .score-same { color: var(--muted); }
+  .score-box { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 8px 14px; margin-bottom: 8px; }
+  .job-replacement { background: rgba(251,146,60,0.12); color: var(--orange); }
+</style>
+</head>
+<body>
+
+<div id="gate" style="position:fixed;inset:0;background:#0a0a0f;display:flex;align-items:center;justify-content:center;z-index:9999">
+  <div style="background:#111118;border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:40px;width:320px;text-align:center">
+    <div style="font-family:'DM Mono',monospace;font-size:11px;color:#63cab7;letter-spacing:3px;text-transform:uppercase;margin-bottom:24px">EthicPrint Admin</div>
+    <input id="pwd-input" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')checkPwd()"
+      style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 16px;color:#fff;font-family:'DM Sans',sans-serif;font-size:14px;outline:none;box-sizing:border-box;margin-bottom:12px">
+    <button onclick="checkPwd()" style="width:100%;background:rgba(99,202,183,0.15);border:1px solid rgba(99,202,183,0.3);color:#63cab7;padding:12px;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500">Enter</button>
+    <div id="pwd-error" style="color:#f87171;font-size:12px;margin-top:10px;display:none">Wrong password</div>
+  </div>
+</div>
+
+<script>
+function checkPwd() {
+  if (document.getElementById('pwd-input').value === 'Vigiethic93!') {
+    document.getElementById('gate').style.display = 'none';
+    loadAll();
+  } else {
+    document.getElementById('pwd-error').style.display = 'block';
+    document.getElementById('pwd-input').value = '';
+    document.getElementById('pwd-input').focus();
+  }
+}
+document.addEventListener('DOMContentLoaded', () => document.getElementById('pwd-input').focus());
+</script>
+
+<header>
+  <h1>EthicPrint Admin</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('pending')">Pending <span class="badge badge-pending" id="badge-pending">–</span></button>
+    <button class="tab" onclick="switchTab('approved')">Approved <span class="badge badge-count" id="badge-approved">–</span></button>
+    <button class="tab" onclick="switchTab('rejected')">Rejected <span class="badge badge-count" id="badge-rejected">–</span></button>
+    <div style="width:1px;height:20px;background:rgba(255,255,255,0.08);margin:0 4px"></div>
+    <button class="tab" onclick="switchTab('scores')">Score Updates <span class="badge badge-pending" id="badge-scores">–</span></button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="stats" id="stats" style="display:none;grid-template-columns:repeat(5,1fr)">
+    <div class="stat"><div class="stat-val" style="color:var(--yellow)" id="s-pending">–</div><div class="stat-label">Pending</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--green)" id="s-approved">–</div><div class="stat-label">Approved</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--red)" id="s-rejected">–</div><div class="stat-label">Rejected</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--accent)" id="s-brands">–</div><div class="stat-label">Brands</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--orange)" id="s-scores">–</div><div class="stat-label">Score Updates</div></div>
+  </div>
+
+  <div class="filter-bar" id="filter-bar" style="display:none">
+    <span>Category:</span>
+    <button class="filter-chip active" onclick="filterCat('all')">All</button>
+    <button class="filter-chip" onclick="filterCat('armi')">⚔️ Arms</button>
+    <button class="filter-chip" onclick="filterCat('ambiente')">🌿 Environment</button>
+    <button class="filter-chip" onclick="filterCat('diritti')">🤝 Rights</button>
+    <button class="filter-chip" onclick="filterCat('fisco')">💰 Tax</button>
+  </div>
+
+  <div id="content"><div class="loading">Loading proposals...</div></div>
+</div>
+
+<div class="toast hide" id="toast"></div>
+
+<script>
+const API = "https://web-production-14708.up.railway.app";
+let currentTab = "pending";
+let currentCat = "all";
+let allProposals = {};
+let counts = { pending: 0, approved: 0, rejected: 0 };
+
+const CAT_LABELS = { armi: "Arms", ambiente: "Environment", diritti: "Rights", fisco: "Tax" };
+const CAT_ICONS = { armi: "⚔️", ambiente: "🌿", diritti: "🤝", fisco: "💰" };
+
+function renderScoreCard(p) {
+  const diff = p.proposed_score - p.current_score;
+  const direction = diff > 0 ? "up" : diff < 0 ? "down" : "same";
+  const arrowClass = `score-${direction}`;
+  const arrow = direction === "up" ? "↑" : direction === "down" ? "↓" : "→";
+  const brand = p.brands?.name || `Brand ${p.brand_id}`;
+  const source = p.sources;
+  const catIcons = { armi: "⚔️", ambiente: "🌿", diritti: "🤝", fisco: "💰" };
+
+  const actions = p.status === "pending"
+    ? `<div class="proposal-actions">
+        <button class="btn btn-approve" onclick="approveScore(${p.id})">✓ Apply</button>
+        <button class="btn btn-reject" onclick="rejectScore(${p.id})">✗ Reject</button>
+       </div>`
+    : `<div class="proposal-actions">
+        <span class="status-chip ${p.status === 'approved' ? 'status-approved' : 'status-rejected'}">${p.status === 'approved' ? '✓ Applied' : '✗ Rejected'}</span>
+       </div>`;
+
+  return `<div class="proposal-card ${p.status}" id="score-card-${p.id}">
+    <span class="cat-badge cat-${p.category_key}">${catIcons[p.category_key] || "•"} ${CAT_LABELS[p.category_key] || p.category_key}</span>
+    <div class="proposal-body">
+      <div class="proposal-title">${brand}</div>
+      <div class="score-box">
+        <span style="font-size:13px;color:var(--muted)">Current:</span>
+        <span class="score-arrow" style="color:var(--text)">${p.current_score}</span>
+        <span style="color:var(--muted);font-size:16px">→</span>
+        <span class="score-arrow ${arrowClass}">${arrow} ${p.proposed_score}</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:4px">(${diff > 0 ? "+" : ""}${diff})</span>
+      </div>
+      ${p.motivation ? `<div class="proposal-summary">${p.motivation}</div>` : ""}
+      ${source ? `<a class="proposal-url" href="${source.url}" target="_blank">↗ ${source.title || source.url}</a>` : ""}
+      <div class="proposal-meta">${new Date(p.created_at).toLocaleDateString("en-GB", {day:"numeric",month:"short",year:"numeric"})}</div>
+    </div>
+    ${actions}
+  </div>`;
+}
+
+async function approveScore(id) {
+  const card = document.getElementById(`score-card-${id}`);
+  card.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await fetch(`${API}/score-proposals/${id}/approve`, { method: "POST" });
+    card.classList.add("approved");
+    card.querySelector(".proposal-actions").innerHTML = `<span class="status-chip status-approved">✓ Applied</span>`;
+    counts.scores = (counts.scores || 0) - 1;
+    document.getElementById("badge-scores").textContent = counts.scores;
+    document.getElementById("s-scores").textContent = counts.scores;
+    showToast("✓ Score updated in database");
+  } catch(e) { showToast("✗ Error — try again", true); card.querySelectorAll("button").forEach(b => b.disabled = false); }
+}
+
+async function rejectScore(id) {
+  const card = document.getElementById(`score-card-${id}`);
+  card.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await fetch(`${API}/score-proposals/${id}/reject`, { method: "POST" });
+    card.classList.add("rejected");
+    card.querySelector(".proposal-actions").innerHTML = `<span class="status-chip status-rejected">✗ Rejected</span>`;
+    counts.scores = (counts.scores || 0) - 1;
+    document.getElementById("badge-scores").textContent = counts.scores;
+    document.getElementById("s-scores").textContent = counts.scores;
+    showToast("Score proposal rejected");
+  } catch(e) { showToast("✗ Error — try again", true); card.querySelectorAll("button").forEach(b => b.disabled = false); }
+}
+
+async function refreshScores() {
+  const res = await fetch(`${API}/score-proposals?status=pending`).then(r => r.json());
+  allProposals.scores = res.proposals;
+  counts.scores = res.count;
+  document.getElementById("badge-scores").textContent = counts.scores;
+  document.getElementById("s-scores").textContent = counts.scores;
+  renderTab();
+}
+
+async function loadAll() {
+  const [p, a, r, s] = await Promise.all([
+    fetch(`${API}/source-proposals?status=pending`).then(r => r.json()),
+    fetch(`${API}/source-proposals?status=approved`).then(r => r.json()),
+    fetch(`${API}/source-proposals?status=rejected`).then(r => r.json()),
+    fetch(`${API}/score-proposals?status=pending`).then(r => r.json()),
+  ]);
+  allProposals = { pending: p.proposals, approved: a.proposals, rejected: r.proposals, scores: s.proposals };
+  counts = { pending: p.count, approved: a.count, rejected: r.count, scores: s.count };
+
+  document.getElementById("badge-pending").textContent = counts.pending;
+  document.getElementById("badge-approved").textContent = counts.approved;
+  document.getElementById("badge-rejected").textContent = counts.rejected;
+  document.getElementById("badge-scores").textContent = counts.scores;
+  document.getElementById("s-scores").textContent = counts.scores;
+  document.getElementById("s-pending").textContent = counts.pending;
+  document.getElementById("s-approved").textContent = counts.approved;
+  document.getElementById("s-rejected").textContent = counts.rejected;
+
+  const brands = new Set(allProposals.pending.map(p => p.brand_id));
+  document.getElementById("s-brands").textContent = brands.size;
+  document.getElementById("stats").style.display = "grid";
+  document.getElementById("filter-bar").style.display = currentTab === "pending" ? "flex" : "none";
+
+  renderTab();
+}
+
+function groupByBrand(proposals) {
+  const groups = {};
+  proposals.forEach(p => {
+    const key = p.brand_id;
+    if (!groups[key]) groups[key] = { name: p.brands?.name || `Brand ${key}`, proposals: [] };
+    groups[key].proposals.push(p);
+  });
+  return groups;
+}
+
+function renderTab() {
+  if (currentTab === "scores") {
+    const proposals = allProposals.scores || [];
+    if (proposals.length === 0) {
+      document.getElementById("content").innerHTML = `<div class="empty"><div class="empty-icon">✅</div>No pending score updates<br><br><button onclick="refreshScores()" style="background:rgba(99,202,183,0.1);border:1px solid rgba(99,202,183,0.25);color:#63cab7;padding:8px 18px;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px">↻ Refresh</button></div>`;
+      return;
     }
-
-
-def get_translation(brand_id: int, lang: str) -> dict | None:
-    """Recupera la traduzione dal DB. Ritorna None se non esiste."""
-    if lang == DEFAULT_LANG:
-        return None
-    try:
-        res = supabase.table("brand_translations")\
-            .select("*")\
-            .eq("brand_id", brand_id)\
-            .eq("lang", lang)\
-            .limit(1)\
-            .execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0]
-        return None
-    except Exception as e:
-        print(f"get_translation error brand_id={brand_id} lang={lang}: {e}")
-        return None
-
-
-async def generate_and_save_translation(brand_id: int, brand: dict, lang: str):
-    """Chiama Claude API per generare una traduzione e la salva in brand_translations."""
-    if not ANTHROPIC_KEY:
-        return
-
-    lang_names = {"it": "Italian", "es": "Spanish", "fr": "French", "de": "German"}
-    lang_name = lang_names.get(lang, lang)
-
-    prompt = f"""Translate the following ethical brand assessment notes from English to {lang_name}.
-Return ONLY a valid JSON object with these exact keys: note_armi, note_ambiente, note_diritti, note_fisco.
-Keep the tone factual and neutral. Do not add or remove information.
-
-Brand: {brand["name"]}
-
-note_armi: {brand["note_armi"]}
-note_ambiente: {brand["note_ambiente"]}
-note_diritti: {brand["note_diritti"]}
-note_fisco: {brand["note_fisco"]}
-"""
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 1000,
-                    "messages": [{"role": "user", "content": prompt}]
-                },
-                timeout=30.0
-            )
-            data = response.json()
-            text = data["content"][0]["text"].strip()
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            translated = json.loads(text.strip())
-
-        supabase.table("brand_translations").upsert({
-            "brand_id": brand_id,
-            "lang": lang,
-            "note_armi": translated.get("note_armi"),
-            "note_ambiente": translated.get("note_ambiente"),
-            "note_diritti": translated.get("note_diritti"),
-            "note_fisco": translated.get("note_fisco"),
-        }, on_conflict="brand_id,lang").execute()
-
-    except Exception as e:
-        print(f"Translation error for brand {brand_id} lang {lang}: {e}")
-
-
-# ─── ENDPOINTS ────────────────────────────────────────────────────────────────
-
-@app.get("/")
-def root():
-    return {"message": "EthicPrint API v2.0.0 — ethicprint.org"}
-
-
-@app.get("/brands")
-def get_brands(
-    sector: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    lang: Optional[str] = Query("en"),
-):
-    """Ritorna tutti i brand. Supporta ?lang=it per le traduzioni."""
-    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-
-    query = supabase.table("brands").select("*, sectors(key, label, label_en, icon)")
-
-    if sector:
-        sector_res = supabase.table("sectors").select("id").eq("key", sector).single().execute()
-        if not sector_res.data:
-            raise HTTPException(status_code=404, detail=f"Sector '{sector}' not found")
-        query = query.eq("sector_id", sector_res.data["id"])
-
-    res = query.order("name").execute()
-    brands = res.data or []
-
-    if search:
-        search_lower = search.lower()
-        brands = [b for b in brands if search_lower in b["name"].lower()]
-
-    if lang != DEFAULT_LANG:
-        translations_res = supabase.table("brand_translations")\
-            .select("*")\
-            .eq("lang", lang)\
-            .execute()
-        translations = {t["brand_id"]: t for t in (translations_res.data or [])}
-        return [format_brand(b, translation=translations.get(b["id"]), lang=lang) for b in brands]
-
-    return [format_brand(b, lang=lang) for b in brands]
-
-
-
-def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3) -> list:
-    """Ritorna i top N brand dello stesso settore per score, escluso il brand stesso."""
-    res = supabase.table("brands")        .select("id, name, logo, score_armi, score_ambiente, score_diritti, score_fisco, sectors(key, label, label_en, icon)")        .eq("sector_id", sector_id)        .neq("id", brand_id)        .execute()
-
-    brands = res.data or []
-
-    def total_score(b):
-        return (b["score_armi"] + b["score_ambiente"] + b["score_diritti"] + b["score_fisco"]) / 4
-
-    # Calcola score del brand corrente per confronto
-    current_res = supabase.table("brands")        .select("score_armi, score_ambiente, score_diritti, score_fisco")        .eq("id", brand_id).limit(1).execute()
-    current_score = 0
-    if current_res.data:
-        c = current_res.data[0]
-        current_score = (c["score_armi"] + c["score_ambiente"] + c["score_diritti"] + c["score_fisco"]) / 4
-
-    # Ritorna solo brand con score più alto del brand corrente
-    better = [b for b in brands if total_score(b) > current_score]
-    brands_sorted = sorted(better, key=total_score, reverse=True)[:top_n]
-
-    result = []
-    for b in brands_sorted:
-        sector = b.get("sectors") or {}
-        sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
-        result.append({
-            "id": b["id"],
-            "name": b["name"],
-            "logo": b["logo"],
-            "score": round(total_score(b)),
-            "sector": sector_label,
-        })
-    return result
-
-@app.get("/brands/{brand_id}")
-async def get_brand(
-    brand_id: int,
-    lang: Optional[str] = Query("en"),
-    background_tasks: BackgroundTasks = None,
-):
-    """Ritorna un singolo brand nella lingua richiesta.
-    Se la traduzione non esiste, la genera in background e ritorna l'inglese."""
-    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-
-    brand_res = supabase.table("brands")\
-        .select("*, sectors(key, label, label_en, icon)")\
-        .eq("id", brand_id)\
-        .single()\
-        .execute()
-
-    if not brand_res.data:
-        raise HTTPException(status_code=404, detail="Brand not found")
-
-    sources_res = supabase.table("sources")\
-        .select("*")\
-        .eq("brand_id", brand_id)\
-        .neq("broken", True)\
-        .neq("content_missing", True)\
-        .order("category_key")\
-        .execute()
-
-    translation = None
-    if lang != DEFAULT_LANG:
-        translation = get_translation(brand_id, lang)
-        if not translation and background_tasks and ANTHROPIC_KEY:
-            background_tasks.add_task(
-                generate_and_save_translation,
-                brand_id,
-                brand_res.data,
-                lang
-            )
-
-    formatted = format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
-
-    # Confidence per categoria — calcolato qui dove abbiamo le sources
-    def conf_level(n):
-        if n >= 3: return {"level": "high", "label_en": "High confidence", "label_it": "Alta affidabilità"}
-        if n == 2: return {"level": "medium", "label_en": "Medium confidence", "label_it": "Attendibilità media"}
-        if n == 1: return {"level": "low", "label_en": "Low confidence", "label_it": "Bassa affidabilità"}
-        return {"level": "none", "label_en": "No sources yet", "label_it": "Nessuna fonte"}
-
-    sources_by_cat = formatted.get("sources", {})
-    formatted["confidence"] = {
-        key: {**conf_level(len(sources_by_cat.get(key, []))), "count": len(sources_by_cat.get(key, []))}
-        for key in ["armi", "ambiente", "diritti", "fisco"]
-    }
-
-    sector_id = brand_res.data.get("sector_id")
-    if sector_id:
-        formatted["alternatives"] = smart_alternatives(brand_id, sector_id, lang)
-    return formatted
-
-
-@app.get("/sectors")
-def get_sectors():
-    res = supabase.table("sectors")\
-        .select("*")\
-        .eq("active", True)\
-        .order("sort_order")\
-        .execute()
-    return res.data or []
-
-
-@app.get("/categories")
-def get_categories():
-    res = supabase.table("categories")\
-        .select("*")\
-        .eq("active", True)\
-        .order("sort_order")\
-        .execute()
-    return res.data or []
-
-
-@app.get("/brands/{brand_id}/sources")
-def get_brand_sources(brand_id: int):
-    brand_res = supabase.table("brands").select("id").eq("id", brand_id).single().execute()
-    if not brand_res.data:
-        raise HTTPException(status_code=404, detail="Brand not found")
-
-    res = supabase.table("sources")\
-        .select("*")\
-        .eq("brand_id", brand_id)\
-        .neq("broken", True)\
-        .neq("content_missing", True)\
-        .order("category_key")\
-        .execute()
-
-    grouped = {}
-    for s in (res.data or []):
-        key = s["category_key"]
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append({
-            "id": s["id"],
-            "url": s["url"],
-            "title": s["title"],
-            "publisher": s["publisher"],
-            "published_at": s["published_at"],
-        })
-
-    return grouped
-
-
-@app.get("/langs")
-def get_langs():
-    """Ritorna le lingue supportate."""
-    return {
-        "default": DEFAULT_LANG,
-        "supported": SUPPORTED_LANGS,
-        "labels": {"en": "English", "it": "Italiano", "es": "Español", "fr": "Français", "de": "Deutsch"}
-    }
-
-
-@app.post("/suggest")
-def suggest_brand(payload: dict):
-    required = ["name", "sector", "reason"]
-    for field in required:
-        if field not in payload or not payload[field]:
-            raise HTTPException(status_code=422, detail=f"Field '{field}' required")
-    return {
-        "message": "Thanks for the suggestion! It will be reviewed by Marco.",
-        "brand": payload.get("name")
-    }
-
-
-@app.get("/sources/issues")
-def get_source_issues():
-    """Ritorna tutte le fonti con problemi (broken o content_missing) per revisione."""
-    res = supabase.table("sources")\
-        .select("id, url, title, publisher, published_at, broken, content_missing, last_checked, brand_id")\
-        .or_("broken.eq.true,content_missing.eq.true")\
-        .order("last_checked", desc=True)\
-        .execute()
-    return {
-        "count": len(res.data or []),
-        "issues": res.data or []
-    }
-
-
-@app.get("/source-proposals")
-def get_source_proposals(status: str = "pending"):
-    """Ritorna le proposte di fonti filtrate per status (pending/approved/rejected)."""
-    res = supabase.table("source_proposals")\
-        .select("*, brands(name)")\
-        .eq("status", status)\
-        .order("created_at", desc=True)\
-        .execute()
-    return {"count": len(res.data or []), "proposals": res.data or []}
-
-
-async def analyze_source_for_score(source_id: int, brand_id: int, category_key: str, url: str, title: str, summary: str):
-    """
-    Dopo l'approvazione di una fonte, Claude legge la pagina e suggerisce
-    una modifica al punteggio della categoria. Salva in score_proposals.
-    MAI aggiornamento automatico — richiede approvazione manuale.
-    """
-    if not ANTHROPIC_KEY:
-        return
-
-    # Recupera punteggio attuale del brand
-    brand_res = supabase.table("brands")        .select(f"score_{category_key}, name")        .eq("id", brand_id).single().execute()
-    if not brand_res.data:
-        return
-
-    current_score = brand_res.data.get(f"score_{category_key}", 50)
-    brand_name = brand_res.data.get("name", "")
-
-    # Fetch contenuto pagina
-    page_content = ""
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, follow_redirects=True)
-            if r.status_code == 200:
-                page_content = r.text[:6000]
-    except Exception:
-        pass
-
-    cat_descriptions = {
-        "armi": "arms, weapons, military contracts, conflicts",
-        "ambiente": "environment, CO2 emissions, climate, sustainability",
-        "diritti": "human rights, labor rights, workers conditions",
-        "fisco": "tax avoidance, tax haven, fiscal transparency",
-    }
-
-    prompt = f"""You are an ethical analyst for EthicPrint, scoring brands on ethical dimensions.
-
-Brand: {brand_name}
-Category: {category_key} ({cat_descriptions.get(category_key, category_key)})
-Current score: {current_score}/100
-Source title: {title}
-Source summary: {summary}
-Source content (truncated):
-{page_content or "(page not accessible)"}
-
-Based on this source, should the score for {brand_name} on {category_key} change?
-Consider: higher score = more ethical. The source may reveal positive or negative behavior.
-
-Reply ONLY with JSON:
-{{
-  "proposed_score": <integer 0-100>,
-  "motivation": "<2-3 sentences explaining why the score should change, or stay the same>",
-  "direction": "increase" | "decrease" | "unchanged"
-}}"""
-
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
-                      "messages": [{"role": "user", "content": prompt}]},
-                timeout=30,
-            )
-            text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
-            result = json.loads(text)
-            proposed_score = max(0, min(100, int(result.get("proposed_score", current_score))))
-            motivation = result.get("motivation", "")
-
-            supabase.table("score_proposals").insert({
-                "brand_id": brand_id,
-                "category_key": category_key,
-                "source_id": source_id,
-                "current_score": current_score,
-                "proposed_score": proposed_score,
-                "motivation": motivation,
-                "status": "pending",
-            }).execute()
-            print(f"Score proposal saved: {brand_name} / {category_key} {current_score}→{proposed_score}")
-    except Exception as e:
-        print(f"Score analysis failed: {e}")
-
-
-@app.post("/source-proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks):
-    """Approva una proposta: la inserisce in sources, avvia analisi score."""
-    prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
-    if not prop_res.data:
-        raise HTTPException(status_code=404, detail="Proposal not found")
-    p = prop_res.data
-
-    # Inserisci in sources
-    new_source = supabase.table("sources").insert({
-        "brand_id": p["brand_id"],
-        "category_key": p["category_key"],
-        "url": p["url"],
-        "title": p["title"],
-        "publisher": p["publisher"],
-        "broken": False,
-        "content_missing": False,
-    }).execute()
-
-    source_id = new_source.data[0]["id"] if new_source.data else None
-
-    # Marca proposta come approvata
-    supabase.table("source_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
-
-    # Se era un sostituto, elimina la fonte originale rotta
-    if p.get("replaces_id"):
-        supabase.table("sources").delete().eq("id", p["replaces_id"]).execute()
-
-    # Analisi score in background — non blocca la risposta
-    if source_id:
-        background_tasks.add_task(
-            analyze_source_for_score,
-            source_id=source_id,
-            brand_id=p["brand_id"],
-            category_key=p["category_key"],
-            url=p["url"],
-            title=p.get("title", ""),
-            summary=p.get("summary", ""),
-        )
-
-    return {"message": "Proposal approved. Score analysis started in background."}
-
-
-@app.post("/source-proposals/{proposal_id}/reject")
-def reject_proposal(proposal_id: int):
-    """Rifiuta una proposta."""
-    supabase.table("source_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
-    return {"message": "Proposal rejected"}
-
-
-@app.get("/score-proposals")
-def get_score_proposals(status: str = "pending"):
-    """Ritorna le proposte di modifica punteggio filtrate per status."""
-    res = supabase.table("score_proposals")        .select("*, brands(name), sources(url, title, publisher)")        .eq("status", status)        .order("created_at", desc=True)        .execute()
-    return {"count": len(res.data or []), "proposals": res.data or []}
-
-
-@app.post("/score-proposals/{proposal_id}/approve")
-def approve_score_proposal(proposal_id: int):
-    """Approva una proposta di score: aggiorna il punteggio nel brand."""
-    prop_res = supabase.table("score_proposals").select("*").eq("id", proposal_id).single().execute()
-    if not prop_res.data:
-        raise HTTPException(status_code=404, detail="Proposal not found")
-    p = prop_res.data
-
-    col = f"score_{p['category_key']}"
-    supabase.table("brands").update({
-        col: p["proposed_score"],
-        "last_updated": "now()"
-    }).eq("id", p["brand_id"]).execute()
-
-    supabase.table("score_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
-    return {"message": f"Score updated: {p['category_key']} → {p['proposed_score']}"}
-
-
-@app.post("/score-proposals/{proposal_id}/reject")
-def reject_score_proposal(proposal_id: int):
-    """Rifiuta una proposta di score."""
-    supabase.table("score_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
-    return {"message": "Score proposal rejected"}
+    const groups = groupByBrand(proposals);
+    let html = `<div style="text-align:right;margin-bottom:12px"><button onclick="refreshScores()" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.4);padding:6px 14px;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:11px">↻ Refresh</button></div>`;
+    Object.values(groups).forEach(group => {
+      html += `<div class="brand-group">
+        <div class="brand-header">
+          <div class="brand-logo">${group.name[0]}</div>
+          <div class="brand-name">${group.name}</div>
+          <div class="brand-count">${group.proposals.length} update${group.proposals.length !== 1 ? "s" : ""}</div>
+        </div>`;
+      group.proposals.forEach(p => { html += renderScoreCard(p); });
+      html += `</div>`;
+    });
+    document.getElementById("content").innerHTML = html;
+    return;
+  }
+
+  const proposals = allProposals[currentTab] || [];
+  const filtered = currentCat === "all" ? proposals : proposals.filter(p => p.category_key === currentCat);
+  document.getElementById("filter-bar").style.display = currentTab === "pending" ? "flex" : "none";
+
+  if (filtered.length === 0) {
+    document.getElementById("content").innerHTML = `<div class="empty"><div class="empty-icon">${currentTab === "pending" ? "✅" : "📭"}</div>No ${currentTab} proposals${currentCat !== "all" ? " in this category" : ""}</div>`;
+    return;
+  }
+
+  const groups = groupByBrand(filtered);
+  let html = "";
+  Object.values(groups).forEach(group => {
+    html += `<div class="brand-group">
+      <div class="brand-header">
+        <div class="brand-logo">${group.name[0]}</div>
+        <div class="brand-name">${group.name}</div>
+        <div class="brand-count">${group.proposals.length} proposal${group.proposals.length !== 1 ? "s" : ""}</div>
+      </div>`;
+    group.proposals.forEach(p => { html += renderCard(p); });
+    html += `</div>`;
+  });
+  document.getElementById("content").innerHTML = html;
+}
+
+function renderCard(p) {
+  const cat = p.category_key;
+  const isApproved = p.status === "approved";
+  const isRejected = p.status === "rejected";
+  const jobClass = p.job_type === "replacement" ? "job-replacement" : "job-new";
+  const jobLabel = p.job_type === "replacement" ? "replacement" : "new";
+
+  const actions = currentTab === "pending"
+    ? `<div class="proposal-actions">
+        <button class="btn btn-approve" onclick="approve(${p.id})">✓ Approve</button>
+        <button class="btn btn-reject" onclick="reject(${p.id})">✗ Reject</button>
+        <button class="btn btn-open" onclick="window.open('${p.url}','_blank')">↗ Open</button>
+       </div>`
+    : `<div class="proposal-actions">
+        <span class="status-chip ${isApproved ? "status-approved" : "status-rejected"}">${isApproved ? "✓ Approved" : "✗ Rejected"}</span>
+        <button class="btn btn-open" onclick="window.open('${p.url}','_blank')" style="margin-top:6px">↗ Open</button>
+       </div>`;
+
+  return `<div class="proposal-card ${p.status}" id="card-${p.id}">
+    <span class="cat-badge cat-${cat}">${CAT_ICONS[cat]} ${CAT_LABELS[cat]}</span>
+    <div class="proposal-body">
+      <div class="proposal-title">${p.title || p.url}</div>
+      <div class="proposal-publisher">${p.publisher || "—"} <span class="job-badge ${jobClass}">${jobLabel}</span></div>
+      ${p.summary ? `<div class="proposal-summary">${p.summary}</div>` : ""}
+      <a class="proposal-url" href="${p.url}" target="_blank">${p.url}</a>
+      <div class="proposal-meta">${new Date(p.created_at).toLocaleDateString("en-GB", {day:"numeric",month:"short",year:"numeric"})}</div>
+    </div>
+    ${actions}
+  </div>`;
+}
+
+async function approve(id) {
+  const card = document.getElementById(`card-${id}`);
+  card.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await fetch(`${API}/source-proposals/${id}/approve`, { method: "POST" });
+    card.classList.add("approved");
+    card.querySelector(".proposal-actions").innerHTML = `<span class="status-chip status-approved">✓ Approved</span>`;
+    counts.pending--;
+    document.getElementById("badge-pending").textContent = counts.pending;
+    document.getElementById("s-pending").textContent = counts.pending;
+    showToast("✓ Source approved and added to database");
+  } catch(e) { showToast("✗ Error — try again", true); card.querySelectorAll("button").forEach(b => b.disabled = false); }
+}
+
+async function reject(id) {
+  const card = document.getElementById(`card-${id}`);
+  card.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await fetch(`${API}/source-proposals/${id}/reject`, { method: "POST" });
+    card.classList.add("rejected");
+    card.querySelector(".proposal-actions").innerHTML = `<span class="status-chip status-rejected">✗ Rejected</span>`;
+    counts.pending--;
+    document.getElementById("badge-pending").textContent = counts.pending;
+    document.getElementById("s-pending").textContent = counts.pending;
+    showToast("Proposal rejected");
+  } catch(e) { showToast("✗ Error — try again", true); card.querySelectorAll("button").forEach(b => b.disabled = false); }
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  currentCat = "all";
+  document.querySelectorAll(".tab").forEach((t, i) => t.classList.toggle("active", ["pending","approved","rejected","scores"][i] === tab));
+  document.querySelectorAll(".filter-chip").forEach(c => c.classList.toggle("active", c.textContent.trim() === "All"));
+  renderTab();
+}
+
+function filterCat(cat) {
+  currentCat = cat;
+  document.querySelectorAll(".filter-chip").forEach(c => {
+    c.classList.toggle("active", c.textContent.toLowerCase().includes(cat) || (cat === "all" && c.textContent.trim() === "All"));
+  });
+  renderTab();
+}
+
+function showToast(msg, error = false) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.style.borderColor = error ? "rgba(248,113,113,0.3)" : "rgba(99,202,183,0.3)";
+  t.classList.remove("hide");
+  setTimeout(() => t.classList.add("hide"), 3000);
+}
+
+// loadAll() called after password check
+</script>
+</body>
+</html>
