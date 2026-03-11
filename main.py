@@ -665,7 +665,7 @@ def reject_proposal(proposal_id: int):
 @app.get("/score-proposals")
 def get_score_proposals(status: str = "pending"):
     """Ritorna le proposte di modifica punteggio filtrate per status."""
-    res = supabase.table("score_proposals")        .select("*, brands(name), sources(url, title, publisher)")        .eq("status", status)        .order("created_at", desc=True)        .execute()
+    res = supabase.table("score_proposals")        .select("*, brands(name), sources(url, title, publisher), scoring_criteria(label_en, label_it, code)")        .eq("status", status)        .order("created_at", desc=True)        .execute()
     return {"count": len(res.data or []), "proposals": res.data or []}
 
 
