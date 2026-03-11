@@ -1,0 +1,3 @@
+[deploy]
+startCommand = "python source_finder.py"
+cronSchedule = "0 9 * * 1"
