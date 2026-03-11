@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query
+import asyncio, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 import os
@@ -404,16 +405,98 @@ def get_source_proposals(status: str = "pending"):
     return {"count": len(res.data or []), "proposals": res.data or []}
 
 
+async def analyze_source_for_score(source_id: int, brand_id: int, category_key: str, url: str, title: str, summary: str):
+    """
+    Dopo l'approvazione di una fonte, Claude legge la pagina e suggerisce
+    una modifica al punteggio della categoria. Salva in score_proposals.
+    MAI aggiornamento automatico — richiede approvazione manuale.
+    """
+    if not ANTHROPIC_KEY:
+        return
+
+    # Recupera punteggio attuale del brand
+    brand_res = supabase.table("brands")        .select(f"score_{category_key}, name")        .eq("id", brand_id).single().execute()
+    if not brand_res.data:
+        return
+
+    current_score = brand_res.data.get(f"score_{category_key}", 50)
+    brand_name = brand_res.data.get("name", "")
+
+    # Fetch contenuto pagina
+    page_content = ""
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, follow_redirects=True)
+            if r.status_code == 200:
+                page_content = r.text[:6000]
+    except Exception:
+        pass
+
+    cat_descriptions = {
+        "armi": "arms, weapons, military contracts, conflicts",
+        "ambiente": "environment, CO2 emissions, climate, sustainability",
+        "diritti": "human rights, labor rights, workers conditions",
+        "fisco": "tax avoidance, tax haven, fiscal transparency",
+    }
+
+    prompt = f"""You are an ethical analyst for EthicPrint, scoring brands on ethical dimensions.
+
+Brand: {brand_name}
+Category: {category_key} ({cat_descriptions.get(category_key, category_key)})
+Current score: {current_score}/100
+Source title: {title}
+Source summary: {summary}
+Source content (truncated):
+{page_content or "(page not accessible)"}
+
+Based on this source, should the score for {brand_name} on {category_key} change?
+Consider: higher score = more ethical. The source may reveal positive or negative behavior.
+
+Reply ONLY with JSON:
+{{
+  "proposed_score": <integer 0-100>,
+  "motivation": "<2-3 sentences explaining why the score should change, or stay the same>",
+  "direction": "increase" | "decrease" | "unchanged"
+}}"""
+
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=30,
+            )
+            text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
+            result = json.loads(text)
+            proposed_score = max(0, min(100, int(result.get("proposed_score", current_score))))
+            motivation = result.get("motivation", "")
+
+            supabase.table("score_proposals").insert({
+                "brand_id": brand_id,
+                "category_key": category_key,
+                "source_id": source_id,
+                "current_score": current_score,
+                "proposed_score": proposed_score,
+                "motivation": motivation,
+                "status": "pending",
+            }).execute()
+            print(f"Score proposal saved: {brand_name} / {category_key} {current_score}→{proposed_score}")
+    except Exception as e:
+        print(f"Score analysis failed: {e}")
+
+
 @app.post("/source-proposals/{proposal_id}/approve")
-def approve_proposal(proposal_id: int):
-    """Approva una proposta: la inserisce in sources e la marca come approvata."""
+async def approve_proposal(proposal_id: int):
+    """Approva una proposta: la inserisce in sources, avvia analisi score."""
     prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
         raise HTTPException(status_code=404, detail="Proposal not found")
     p = prop_res.data
 
     # Inserisci in sources
-    supabase.table("sources").insert({
+    new_source = supabase.table("sources").insert({
         "brand_id": p["brand_id"],
         "category_key": p["category_key"],
         "url": p["url"],
@@ -423,14 +506,27 @@ def approve_proposal(proposal_id: int):
         "content_missing": False,
     }).execute()
 
+    source_id = new_source.data[0]["id"] if new_source.data else None
+
     # Marca proposta come approvata
     supabase.table("source_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
 
-    # Se era un sostituto, marca la fonte originale come rimossa
+    # Se era un sostituto, elimina la fonte originale rotta
     if p.get("replaces_id"):
         supabase.table("sources").delete().eq("id", p["replaces_id"]).execute()
 
-    return {"message": "Proposal approved and source added"}
+    # Analisi score in background — non blocca la risposta
+    if source_id:
+        asyncio.create_task(analyze_source_for_score(
+            source_id=source_id,
+            brand_id=p["brand_id"],
+            category_key=p["category_key"],
+            url=p["url"],
+            title=p.get("title", ""),
+            summary=p.get("summary", ""),
+        ))
+
+    return {"message": "Proposal approved. Score analysis started in background."}
 
 
 @app.post("/source-proposals/{proposal_id}/reject")
@@ -438,3 +534,35 @@ def reject_proposal(proposal_id: int):
     """Rifiuta una proposta."""
     supabase.table("source_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
     return {"message": "Proposal rejected"}
+
+
+@app.get("/score-proposals")
+def get_score_proposals(status: str = "pending"):
+    """Ritorna le proposte di modifica punteggio filtrate per status."""
+    res = supabase.table("score_proposals")        .select("*, brands(name), sources(url, title, publisher)")        .eq("status", status)        .order("created_at", desc=True)        .execute()
+    return {"count": len(res.data or []), "proposals": res.data or []}
+
+
+@app.post("/score-proposals/{proposal_id}/approve")
+def approve_score_proposal(proposal_id: int):
+    """Approva una proposta di score: aggiorna il punteggio nel brand."""
+    prop_res = supabase.table("score_proposals").select("*").eq("id", proposal_id).single().execute()
+    if not prop_res.data:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    p = prop_res.data
+
+    col = f"score_{p['category_key']}"
+    supabase.table("brands").update({
+        col: p["proposed_score"],
+        "last_updated": "now()"
+    }).eq("id", p["brand_id"]).execute()
+
+    supabase.table("score_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
+    return {"message": f"Score updated: {p['category_key']} → {p['proposed_score']}"}
+
+
+@app.post("/score-proposals/{proposal_id}/reject")
+def reject_score_proposal(proposal_id: int):
+    """Rifiuta una proposta di score."""
+    supabase.table("score_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
+    return {"message": "Score proposal rejected"}
