@@ -140,28 +140,49 @@ async def send_notification(total_proposals: int):
     proposals = supabase.table("source_proposals").select("id, url, title, publisher, brand_id, category_key, job_type")\
         .eq("status", "pending").execute().data or []
 
-    rows = "".join(
-        f"<tr><td style='padding:6px;border-bottom:1px solid #eee'>{p.get('publisher','—')}</td>"
-        f"<td style='padding:6px;border-bottom:1px solid #eee'>{p.get('category_key','')}</td>"
-        f"<td style='padding:6px;border-bottom:1px solid #eee'><a href='{p.get('url','')}'>{(p.get('title') or p.get('url',''))[:60]}</a></td></tr>"
-        for p in proposals
-    )
+    # Raggruppa per brand
+    from collections import defaultdict
+    by_brand = defaultdict(list)
+    for p in proposals:
+        by_brand[p.get("brand_id")].append(p)
 
-    html = f"""<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-  <h2 style="color:#2d7d46">📬 EthicPrint — Weekly Source Finder</h2>
-  <p>Found <strong>{total_proposals} new source proposals</strong> this week. Review and approve below.</p>
-  <table style="width:100%;border-collapse:collapse">
-    <thead><tr>
-      <th style="padding:6px;text-align:left">Publisher</th>
-      <th style="padding:6px;text-align:left">Category</th>
-      <th style="padding:6px;text-align:left">Source</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-  </table>
-  <p style="margin-top:20px">
-    <a href="https://web-production-14708.up.railway.app/source-proposals">Review proposals →</a>
-  </p>
-  <p style="color:#999;font-size:12px">EthicPrint weekly finder · {datetime.now().strftime('%Y-%m-%d')}</p>
+    cat_icons = {"armi": "⚔️", "ambiente": "🌿", "diritti": "🤝", "fisco": "💰"}
+    brand_sections = ""
+    for brand_id, brand_proposals in by_brand.items():
+        brand_name = brand_proposals[0].get("brands", {}).get("name", f"Brand {brand_id}") if isinstance(brand_proposals[0].get("brands"), dict) else f"Brand {brand_id}"
+        rows = "".join(
+            f"<tr>"
+            f"<td style='padding:8px 6px;border-bottom:1px solid #f0f0f0;font-size:12px'>{cat_icons.get(p.get('category_key',''),'•')} {p.get('category_key','').capitalize()}</td>"
+            f"<td style='padding:8px 6px;border-bottom:1px solid #f0f0f0;font-size:12px'>{p.get('publisher','—')}</td>"
+            f"<td style='padding:8px 6px;border-bottom:1px solid #f0f0f0;font-size:12px'><a href='{p.get('url','')}' style='color:#2d7d46'>{(p.get('title') or p.get('url',''))[:55]}</a></td>"
+            f"</tr>"
+            for p in brand_proposals
+        )
+        brand_sections += f"""
+        <div style="margin-bottom:20px">
+          <div style="font-weight:600;font-size:14px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #e8f5e9;color:#1a1a2e">{brand_name}</div>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:#f8f8f8">
+              <th style="padding:6px;text-align:left;font-size:11px;color:#666">Category</th>
+              <th style="padding:6px;text-align:left;font-size:11px;color:#666">Publisher</th>
+              <th style="padding:6px;text-align:left;font-size:11px;color:#666">Source</th>
+            </tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>"""
+
+    html = f"""<div style="font-family:sans-serif;max-width:620px;margin:0 auto;color:#1a1a2e">
+  <div style="background:#2d7d46;padding:20px 24px;border-radius:12px 12px 0 0">
+    <h2 style="color:#fff;margin:0;font-size:18px">📬 EthicPrint — Weekly Source Finder</h2>
+    <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:13px">{total_proposals} new proposals across {len(by_brand)} brands</p>
+  </div>
+  <div style="background:#fff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;padding:24px">
+    {brand_sections}
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;text-align:center">
+      <a href="https://ethicprint.org/admin.html" style="display:inline-block;background:#2d7d46;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600">Review all proposals →</a>
+    </div>
+    <p style="color:#999;font-size:11px;text-align:center;margin-top:16px">EthicPrint weekly finder · {datetime.now().strftime('%Y-%m-%d')}</p>
+  </div>
 </div>"""
 
     try:
