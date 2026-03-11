@@ -270,6 +270,8 @@ async def get_brand(
     sources_res = supabase.table("sources")\
         .select("*")\
         .eq("brand_id", brand_id)\
+        .neq("broken", True)\
+        .neq("content_missing", True)\
         .order("category_key")\
         .execute()
 
@@ -334,6 +336,8 @@ def get_brand_sources(brand_id: int):
     res = supabase.table("sources")\
         .select("*")\
         .eq("brand_id", brand_id)\
+        .neq("broken", True)\
+        .neq("content_missing", True)\
         .order("category_key")\
         .execute()
 
@@ -372,4 +376,18 @@ def suggest_brand(payload: dict):
     return {
         "message": "Thanks for the suggestion! It will be reviewed by Marco.",
         "brand": payload.get("name")
+    }
+
+
+@app.get("/sources/issues")
+def get_source_issues():
+    """Ritorna tutte le fonti con problemi (broken o content_missing) per revisione."""
+    res = supabase.table("sources")\
+        .select("id, url, title, publisher, published_at, broken, content_missing, last_checked, brand_id")\
+        .or_("broken.eq.true,content_missing.eq.true")\
+        .order("last_checked", desc=True)\
+        .execute()
+    return {
+        "count": len(res.data or []),
+        "issues": res.data or []
     }
