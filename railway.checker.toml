@@ -1,0 +1,3 @@
+[deploy]
+startCommand = "python checker.py"
+cronSchedule = "0 8 * * *"
