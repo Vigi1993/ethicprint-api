@@ -478,6 +478,33 @@ def suggest_brand(payload: dict):
     }
 
 
+@app.get("/sources/public")
+def get_public_sources():
+    """Ritorna tutte le fonti valide con brand e tier, per la pagina pubblica."""
+    res = supabase.table("sources")\
+        .select("id, url, title, publisher, published_at, category_key, tier, brand_id, brands(name)")\
+        .neq("broken", True)\
+        .neq("content_missing", True)\
+        .order("tier")\
+        .execute()
+    sources = res.data or []
+    # Arricchisci con tier auto-detect se tier è null o mancante
+    for s in sources:
+        if not s.get("tier"):
+            s["tier"] = detect_tier(s.get("publisher", ""))
+    total = len(sources)
+    by_tier = {1: [], 2: [], 3: []}
+    for s in sources:
+        t = s.get("tier", 3)
+        by_tier[t if t in [1,2,3] else 3].append(s)
+    return {
+        "total": total,
+        "tier1": by_tier[1],
+        "tier2": by_tier[2],
+        "tier3": by_tier[3],
+    }
+
+
 @app.get("/sources/issues")
 def get_source_issues():
     """Ritorna tutte le fonti con problemi (broken o content_missing) per revisione."""
