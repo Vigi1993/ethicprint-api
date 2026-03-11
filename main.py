@@ -391,3 +391,50 @@ def get_source_issues():
         "count": len(res.data or []),
         "issues": res.data or []
     }
+
+
+@app.get("/source-proposals")
+def get_source_proposals(status: str = "pending"):
+    """Ritorna le proposte di fonti filtrate per status (pending/approved/rejected)."""
+    res = supabase.table("source_proposals")\
+        .select("*, brands(name)")\
+        .eq("status", status)\
+        .order("created_at", desc=True)\
+        .execute()
+    return {"count": len(res.data or []), "proposals": res.data or []}
+
+
+@app.post("/source-proposals/{proposal_id}/approve")
+def approve_proposal(proposal_id: int):
+    """Approva una proposta: la inserisce in sources e la marca come approvata."""
+    prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
+    if not prop_res.data:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    p = prop_res.data
+
+    # Inserisci in sources
+    supabase.table("sources").insert({
+        "brand_id": p["brand_id"],
+        "category_key": p["category_key"],
+        "url": p["url"],
+        "title": p["title"],
+        "publisher": p["publisher"],
+        "broken": False,
+        "content_missing": False,
+    }).execute()
+
+    # Marca proposta come approvata
+    supabase.table("source_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
+
+    # Se era un sostituto, marca la fonte originale come rimossa
+    if p.get("replaces_id"):
+        supabase.table("sources").delete().eq("id", p["replaces_id"]).execute()
+
+    return {"message": "Proposal approved and source added"}
+
+
+@app.post("/source-proposals/{proposal_id}/reject")
+def reject_proposal(proposal_id: int):
+    """Rifiuta una proposta."""
+    supabase.table("source_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
+    return {"message": "Proposal rejected"}
