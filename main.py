@@ -854,3 +854,150 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
             "last_updated": s["last_updated"] if s else None,
         })
     return result
+
+
+# ─── CONTRIBUTION ENDPOINTS ───────────────────────────────────────────────────
+
+from pydantic import BaseModel as PydanticBase
+from typing import Optional as Opt
+
+class BrandProposalIn(PydanticBase):
+    name: str
+    sector_key: Opt[str] = None
+    website: Opt[str] = None
+    reason: Opt[str] = None
+    submitter: Opt[str] = None
+
+class SourceProposalIn(PydanticBase):
+    brand_id: int
+    category_key: str
+    url: str
+    title: Opt[str] = None
+    publisher: Opt[str] = None
+    summary: Opt[str] = None
+    submitter: Opt[str] = None
+
+class ErrorReportIn(PydanticBase):
+    brand_id: int
+    category_key: Opt[str] = None
+    description: str
+    source_url: Opt[str] = None
+    submitter: Opt[str] = None
+
+
+@app.post("/contribute/brand")
+def propose_brand(data: BrandProposalIn):
+    """Proposta pubblica di un nuovo brand da aggiungere."""
+    if not data.name or len(data.name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Brand name too short")
+    try:
+        res = supabase.table("brand_proposals").insert({
+            "name": data.name.strip(),
+            "sector_key": data.sector_key,
+            "website": data.website,
+            "reason": data.reason,
+            "submitter": data.submitter,
+            "status": "pending",
+        }).execute()
+        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/contribute/source")
+def propose_source_public(data: SourceProposalIn):
+    """Proposta pubblica di una nuova fonte per un brand esistente."""
+    if not data.url or not data.url.startswith("http"):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    # Controlla che il brand esista
+    brand = supabase.table("brands").select("id").eq("id", data.brand_id).limit(1).execute()
+    if not brand.data:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    # Controlla duplicati
+    existing = supabase.table("sources").select("id").eq("url", data.url).execute()
+    existing_prop = supabase.table("source_proposals").select("id").eq("url", data.url).execute()
+    if existing.data or existing_prop.data:
+        raise HTTPException(status_code=409, detail="Source already exists or proposed")
+    try:
+        res = supabase.table("source_proposals").insert({
+            "brand_id": data.brand_id,
+            "category_key": data.category_key,
+            "url": data.url,
+            "title": data.title,
+            "publisher": data.publisher or "",
+            "summary": data.summary or "",
+            "status": "pending",
+            "job_type": "new",
+        }).execute()
+        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/contribute/error")
+def report_error(data: ErrorReportIn):
+    """Segnalazione pubblica di un errore su un brand esistente."""
+    if not data.description or len(data.description.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Description too short")
+    brand = supabase.table("brands").select("id").eq("id", data.brand_id).limit(1).execute()
+    if not brand.data:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    try:
+        res = supabase.table("error_reports").insert({
+            "brand_id": data.brand_id,
+            "category_key": data.category_key,
+            "description": data.description.strip(),
+            "source_url": data.source_url,
+            "submitter": data.submitter,
+            "status": "pending",
+        }).execute()
+        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/contribute/brands-list")
+def get_brands_for_contribute(lang: str = "en"):
+    """Lista brand per il form contribuzione (id + name + sector)."""
+    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+    res = supabase.table("brands")\
+        .select("id, name, logo, sectors(key, label, label_en)")\
+        .order("name")\
+        .execute()
+    brands = res.data or []
+    return [{"id": b["id"], "name": b["name"], "logo": b["logo"],
+             "sector": (b.get("sectors") or {}).get("label_en" if lang == "en" else "label", "")}
+            for b in brands]
+
+
+@app.get("/contribute/pending")
+def get_contributions_pending():
+    """Ritorna tutte le contribuzioni pendenti per l'admin."""
+    brand_props = supabase.table("brand_proposals")\
+        .select("*").eq("status", "pending").order("created_at", desc=True).execute().data or []
+    error_reps = supabase.table("error_reports")\
+        .select("*, brands(name, logo)").eq("status", "pending")\
+        .order("created_at", desc=True).execute().data or []
+    return {
+        "brand_proposals": brand_props,
+        "error_reports": error_reps,
+        "counts": {"brand_proposals": len(brand_props), "error_reports": len(error_reps)}
+    }
+
+
+@app.post("/contribute/brand-proposal/{proposal_id}/resolve")
+def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
+    """Approva o rifiuta una proposta di brand."""
+    if status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be approved or rejected")
+    supabase.table("brand_proposals").update({"status": status}).eq("id", proposal_id).execute()
+    return {"ok": True}
+
+
+@app.post("/contribute/error-report/{report_id}/resolve")
+def resolve_error_report(report_id: int, status: str = "resolved"):
+    """Segna una segnalazione errore come risolta o ignorata."""
+    if status not in ("resolved", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be resolved or rejected")
+    supabase.table("error_reports").update({"status": status}).eq("id", report_id).execute()
+    return {"ok": True}
