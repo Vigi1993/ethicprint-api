@@ -176,6 +176,83 @@ def apply_translation(brand: dict, translation: dict) -> dict:
     return brand
 
 
+
+async def generate_impact_summary(brand_id: int, brand: dict, sources: list, confidence: dict) -> dict:
+    """
+    Genera una frase di impatto reale in EN e IT per un brand.
+    Basata su punteggi, note e dati di confidence.
+    Salva in brands.impact_summary_en/it.
+    """
+    if not ANTHROPIC_KEY:
+        return {}
+
+    import httpx as _httpx
+
+    name = brand.get("name", "")
+    sector = (brand.get("sectors") or {}).get("label_en", "")
+    scores = {
+        "armi":     brand.get("score_armi", 0),
+        "ambiente": brand.get("score_ambiente", 0),
+        "diritti":  brand.get("score_diritti", 0),
+        "fisco":    brand.get("score_fisco", 0),
+    }
+    notes = {
+        "armi":     brand.get("note_armi", "") or "",
+        "ambiente": brand.get("note_ambiente", "") or "",
+        "diritti":  brand.get("note_diritti", "") or "",
+        "fisco":    brand.get("note_fisco", "") or "",
+    }
+    data_ok = [cat for cat in ["armi","ambiente","diritti","fisco"]
+               if confidence.get(cat, {}).get("data_status") == "ok"]
+
+    if not data_ok:
+        return {}
+
+    cats_scored = ", ".join(data_ok)
+    notes_text = "\n".join([f"- {cat}: {notes[cat]}" for cat in data_ok if notes[cat]])
+    scores_text = "\n".join([f"- {cat}: {scores[cat]}/25" for cat in data_ok])
+
+    prompt = f"""You are writing a concise ethical impact summary for EthicPrint, a brand ethics scoring tool.
+
+Brand: {name}
+Sector: {sector}
+Categories with sufficient data: {cats_scored}
+
+Scores (out of 25 per category):
+{scores_text}
+
+Notes:
+{notes_text}
+
+Write TWO short sentences (max 35 words each) that tell a consumer the CONCRETE ethical impact of choosing or avoiding this brand.
+Be specific, factual, and direct. No marketing language. Focus on what matters most based on the data.
+
+Return ONLY valid JSON:
+{{"en": "English sentence here.", "it": "Frase italiana qui."}}"""
+
+    try:
+        async with _httpx.AsyncClient() as c:
+            r = await c.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=30,
+            )
+            text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
+            result = __import__("json").loads(text)
+            en = result.get("en", "")
+            it = result.get("it", "")
+            if en and it:
+                supabase.table("brands").update({
+                    "impact_summary_en": en,
+                    "impact_summary_it": it,
+                }).eq("id", brand_id).execute()
+            return {"en": en, "it": it}
+    except Exception as e:
+        print(f"generate_impact_summary error: {e}")
+        return {}
+
 def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
     """Trasforma una riga del DB nel formato usato dal frontend."""
     if translation:
@@ -237,6 +314,7 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         },
         "sources": grouped_sources,
         "confidence": confidence,
+        "impact_summary": brand.get(f"impact_summary_{lang}") or brand.get("impact_summary_en") or "",
         "alternatives": [],  # populated by smart_alternatives()
         "last_updated": brand["last_updated"],
     }
@@ -436,6 +514,16 @@ async def get_brand(
 
     # Confidence pesata per tier — tier1=3pts, tier2=2pts, tier3=1pt
     formatted["confidence"] = weighted_confidence(sources_res.data or [])
+
+    # Genera impact summary se mancante e ci sono dati sufficienti
+    if not brand_res.data.get("impact_summary_en") and background_tasks and ANTHROPIC_KEY:
+        background_tasks.add_task(
+            generate_impact_summary,
+            brand_id,
+            brand_res.data,
+            sources_res.data or [],
+            formatted["confidence"],
+        )
 
     sector_id = brand_res.data.get("sector_id")
     if sector_id:
