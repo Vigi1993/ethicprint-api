@@ -528,6 +528,26 @@ def get_publishers():
     }
 
 
+@app.get("/costs/brave-count")
+def get_brave_count():
+    """Ritorna il conteggio chiamate Brave Search dal DB (incrementato da finder/checker)."""
+    now = __import__("datetime").datetime.now()
+    month_key = now.strftime("%Y-%m")
+    try:
+        res = supabase.table("brave_usage")            .select("*")            .eq("month", month_key)            .limit(1)            .execute()
+        if res.data:
+            row = res.data[0]
+            return {
+                "month": row.get("month", month_key),
+                "finder": row.get("finder_calls", 0),
+                "checker": row.get("checker_calls", 0),
+                "month_total": (row.get("finder_calls", 0) + row.get("checker_calls", 0)),
+            }
+        return {"month": month_key, "finder": 0, "checker": 0, "month_total": 0}
+    except Exception as e:
+        return {"month": month_key, "finder": 0, "checker": 0, "month_total": 0, "error": str(e)}
+
+
 @app.get("/sources/public")
 def get_public_sources():
     """Ritorna tutte le fonti valide con brand e tier, per la pagina pubblica."""
