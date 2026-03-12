@@ -41,7 +41,26 @@ MAX_SOURCES_PER_CAT = 5    # sopra → non cerca nuove fonti (a meno che siano t
 FRESHNESS_MONTHS = 18      # finestra di freshness in mesi
 
 
-async def brave_search(query: str, count: int = 5) -> list[dict]:
+def track_brave_call(job_type: str = "finder"):
+    """Incrementa il contatore chiamate Brave nel DB per il mese corrente."""
+    month_key = datetime.now().strftime("%Y-%m")
+    col = "finder_calls" if job_type == "finder" else "checker_calls"
+    try:
+        existing = supabase.table("brave_usage").select("id").eq("month", month_key).limit(1).execute()
+        if existing.data:
+            row_id = existing.data[0]["id"]
+            supabase.rpc("increment_brave", {"row_id": row_id, "col_name": col}).execute()
+        else:
+            supabase.table("brave_usage").insert({
+                "month": month_key,
+                "finder_calls": 1 if job_type == "finder" else 0,
+                "checker_calls": 0 if job_type == "finder" else 1,
+            }).execute()
+    except Exception as e:
+        print(f"  ⚠ brave tracking failed: {e}")
+
+
+async def brave_search(query: str, count: int = 5, job_type: str = "finder") -> list[dict]:
     if not BRAVE_KEY:
         return []
     try:
@@ -53,6 +72,7 @@ async def brave_search(query: str, count: int = 5) -> list[dict]:
                 timeout=10,
             )
             results = r.json().get("web", {}).get("results", [])
+            track_brave_call(job_type)
             return [{"url": x.get("url"), "title": x.get("title"), "description": x.get("description", "")} for x in results]
     except Exception as e:
         print(f"  ⚠ Brave search failed: {e}")
