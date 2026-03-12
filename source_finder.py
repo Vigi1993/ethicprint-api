@@ -203,14 +203,29 @@ async def send_notification(total_proposals: int):
         print(f"✗ Notification failed: {e}")
 
 
-async def run_finder():
+async def run_finder(limit: int | None = None):
     print(f"\n{'='*50}")
-    print(f"EthicPrint Weekly Source Finder — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"EthicPrint Source Finder — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if limit:
+        print(f"Mode: manual run · limit {limit} brands")
+    else:
+        print(f"Mode: full weekly run")
     print(f"{'='*50}\n")
 
+    # Priorità ai brand con meno fonti
     brands_res = supabase.table("brands").select("id, name").order("name").execute()
-    brands = brands_res.data or []
-    print(f"Processing {len(brands)} brands\n")
+    all_brands = brands_res.data or []
+
+    # Ordina per numero di fonti esistenti (meno fonti = priorità maggiore)
+    def source_count(brand):
+        res = supabase.table("sources").select("id", count="exact").eq("brand_id", brand["id"]).execute()
+        return res.count or 0
+
+    brands_sorted = sorted(all_brands, key=source_count)
+
+    # Applica limit se specificato
+    brands = brands_sorted[:limit] if limit else brands_sorted
+    print(f"Processing {len(brands)} of {len(all_brands)} brands\n")
 
     total_proposals = 0
     for brand in brands:
@@ -227,4 +242,23 @@ async def run_finder():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_finder())
+    import sys
+    # Uso: python source_finder.py [limit]
+    # Es:  python source_finder.py 10   → processa solo 10 brand
+    #      python source_finder.py       → processa tutti
+    limit_arg = None
+    if len(sys.argv) > 1:
+        try:
+            limit_arg = int(sys.argv[1])
+            print(f"Manual run with limit={limit_arg}")
+        except ValueError:
+            print(f"Invalid limit '{sys.argv[1]}', running full")
+    # Env override (utile per Railway cron)
+    env_limit = os.getenv("FINDER_LIMIT")
+    if env_limit and limit_arg is None:
+        try:
+            limit_arg = int(env_limit)
+        except ValueError:
+            pass
+
+    asyncio.run(run_finder(limit=limit_arg))
