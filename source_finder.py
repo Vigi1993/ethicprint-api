@@ -35,6 +35,11 @@ CATEGORY_LABELS = {
 CURRENT_YEAR = datetime.now().year
 SEARCH_YEARS = f"{CURRENT_YEAR - 1}..{CURRENT_YEAR}"
 
+# Soglie fonti per categoria
+MIN_SOURCES_PER_CAT = 2    # sotto → categoria "insufficient", non contribuisce al punteggio
+MAX_SOURCES_PER_CAT = 5    # sopra → non cerca nuove fonti (a meno che siano tutte vecchie)
+FRESHNESS_MONTHS = 18      # finestra di freshness in mesi
+
 
 async def brave_search(query: str, count: int = 5) -> list[dict]:
     if not BRAVE_KEY:
@@ -89,16 +94,82 @@ Reply ONLY with JSON:
     return None
 
 
+def get_cat_status(brand_id: int, cat_key: str) -> dict:
+    """
+    Controlla le fonti approvate per brand+categoria.
+    Ritorna: count totale, fresh_count (entro FRESHNESS_MONTHS), needs_search (bool).
+    """
+    from datetime import timedelta
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
+
+    res = supabase.table("sources")        .select("id, published_at")        .eq("brand_id", brand_id)        .eq("category_key", cat_key)        .eq("broken", False)        .execute()
+    sources = res.data or []
+    total = len(sources)
+
+    fresh = 0
+    for s in sources:
+        pub = s.get("published_at")
+        if not pub:
+            fresh += 1  # senza data consideriamo fresca
+            continue
+        try:
+            pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+            if pub_dt >= freshness_cutoff:
+                fresh += 1
+        except Exception:
+            fresh += 1
+
+    # Cerca nuove fonti se:
+    # - totale < MIN → categoria insufficiente, urgente
+    # - totale >= MIN ma fresche < MIN → fonti obsolete, serve aggiornamento
+    # - totale >= MAX → non cerca (abbastanza fonti fresche)
+    needs_search = total < MAX_SOURCES_PER_CAT and fresh < MIN_SOURCES_PER_CAT
+
+    return {"total": total, "fresh": fresh, "needs_search": needs_search}
+
+
 async def find_new_sources(brand: dict) -> int:
-    """Cerca nuove fonti per tutte le categorie di un brand."""
+    """
+    Cerca nuove fonti per le categorie che ne hanno bisogno.
+    Logica per categoria:
+      - total >= MAX e fresh >= MIN → skip (abbastanza fonti fresche)
+      - fresh < MIN              → cerca (fonti obsolete o insufficienti)
+    Priorità: insufficient (1 fonte) > none (0 fonti) > stale (vecchie)
+    """
     brand_name = brand["name"]
+    brand_id = brand["id"]
     total_proposals = 0
 
-    for cat_key, cat_desc in CATEGORY_LABELS.items():
+    # Calcola status per ogni categoria e ordina per priorità
+    cat_statuses = []
+    for cat_key in CATEGORY_LABELS:
+        status = get_cat_status(brand_id, cat_key)
+        priority = 0
+        if status["total"] == 0:
+            priority = 2      # nessuna fonte → alta priorità
+        elif status["total"] < MIN_SOURCES_PER_CAT:
+            priority = 3      # insufficiente → priorità massima
+        elif status["fresh"] < MIN_SOURCES_PER_CAT:
+            priority = 1      # fonti obsolete → priorità media
+        status["cat_key"] = cat_key
+        status["priority"] = priority
+        cat_statuses.append(status)
+
+    # Ordina per priorità decrescente
+    cat_statuses.sort(key=lambda x: x["priority"], reverse=True)
+
+    for cat_status in cat_statuses:
+        cat_key = cat_status["cat_key"]
+        if not cat_status["needs_search"]:
+            print(f"  ✓ {brand_name} / {cat_key} — ok ({cat_status['fresh']} fresh sources)")
+            continue
+
+        cat_desc = CATEGORY_LABELS[cat_key]
         query = f"{brand_name} {cat_desc} {SEARCH_YEARS}"
-        print(f"  🔍 {brand_name} / {cat_key}...")
+        print(f"  🔍 {brand_name} / {cat_key} — searching (total={cat_status['total']}, fresh={cat_status['fresh']})...")
 
         candidates = await brave_search(query, count=5)
+        found = 0
         for candidate in candidates:
             if not candidate.get("url"):
                 continue
@@ -112,7 +183,7 @@ async def find_new_sources(brand: dict) -> int:
             evaluated = await evaluate_source(brand_name, cat_key, candidate)
             if evaluated:
                 supabase.table("source_proposals").insert({
-                    "brand_id": brand["id"],
+                    "brand_id": brand_id,
                     "category_key": cat_key,
                     "url": evaluated["url"],
                     "title": evaluated.get("title"),
@@ -124,7 +195,9 @@ async def find_new_sources(brand: dict) -> int:
                 }).execute()
                 print(f"    ✅ Proposal: {evaluated['url'][:60]}")
                 total_proposals += 1
-                break  # Max 1 proposta per brand+categoria per settimana
+                found += 1
+                if found >= (MIN_SOURCES_PER_CAT - cat_status["fresh"]):
+                    break  # cerca solo quante ne mancano
 
             await asyncio.sleep(1)
 
