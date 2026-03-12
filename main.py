@@ -24,9 +24,41 @@ DEFAULT_LANG = "en"
 # Tier 2 = testate nazionali, report ufficiali, dati governativi (peso 2)
 # Tier 3 = blog, fonti minori, non verificate (peso 1)
 
+# ─── SCORING V2 CONSTANTS ────────────────────────────────────────────────────
+# Valori assoluti per tier e giudizio
+# T1: ±20/±10 | T2: ±10/±5 | T3: ±2/±1
+TIER_VALUES = {
+    1: {"positive": 20, "prev_positive": 10, "prev_negative": -10, "negative": -20},
+    2: {"positive": 10, "prev_positive":  5, "prev_negative":  -5, "negative": -10},
+    3: {"positive":  2, "prev_positive":  1, "prev_negative":  -1, "negative":  -2},
+}
+SCORE_LABELS = {
+    "positive":      {"en": "Positive evidence",       "it": "Evidenza positiva"},
+    "prev_positive": {"en": "Predominantly positive",  "it": "Prevalentemente positiva"},
+    "prev_negative": {"en": "Predominantly negative",  "it": "Prevalentemente negativa"},
+    "negative":      {"en": "Negative evidence",       "it": "Evidenza negativa"},
+}
+
+# Soglia minima fonti per pubblicare un criterio:
+#   1 T1, oppure ≥2 T2, oppure 1 T2 + ≥3 T3
+FRESHNESS_MONTHS = 18
+
+# Range totale: 20 criteri × max ±20 = ±400
+SCORE_RANGE = 400
+CATS = ["armi", "ambiente", "diritti", "fisco"]
+
+# Fasce verdetto (-400/+400)
+VERDICTS = [
+    (200,  400, "Deeply Ethical",        "Profondamente Etico",   "🌿"),
+    ( 50,  199, "Fairly Ethical",         "Abbastanza Etico",      "✅"),
+    (-49,   49, "Partially Ethical",      "Parzialmente Etico",    "⚖️"),
+    (-199, -50, "Scarcely Ethical",       "Scarsamente Etico",     "⚠️"),
+    (-400,-200, "Ethically Compromised",  "Eticamente Inadeguato", "🚫"),
+]
+
+# Legacy — mantenuto per compatibilità temporanea
 TIER_WEIGHTS = {1: 3, 2: 2, 3: 1}
-MIN_SOURCES_PER_CAT = 2   # soglia minima fonti approvate per contribuire al punteggio
-FRESHNESS_MONTHS = 18     # finestra freshness in mesi
+MIN_SOURCES_PER_CAT = 2
 
 # Cache publishers from DB (refreshed every hour)
 _publishers_cache: dict = {}
@@ -62,25 +94,176 @@ def detect_tier(publisher: str) -> int:
             return tier
     return 3
 
-def weighted_confidence(sources: list) -> dict:
+def compute_criterion_score(css_rows: list) -> dict:
     """
-    Calcola confidence pesata per categoria.
-    Peso: tier1=3, tier2=2, tier3=1
-    Soglie score pesato:
-      high   → ≥ 6  (es. 2× tier1, o 1× tier1 + 1× tier2 + 1× tier3, ...)
-      medium → ≥ 3  (es. 1× tier1, o 3× tier3)
-      low    → ≥ 1
-      none   → 0
+    Calcola il punteggio di un criterio dato un insieme di criterion_source_scores.
+    Logica a cascata:
+      1. Ha T1 → media valori T1
+      2. No T1, ≥2 T2 → media valori T2
+      3. No T1, 1 T2 + ≥3 T3 → media(T3) poi media con T2
+      4. Altrimenti → non pubblicato
 
-    data_status per categoria:
-      ok           → ≥ MIN_SOURCES_PER_CAT fonti → contribuisce al totale
-      insufficient → 1 fonte → non contribuisce, segnalato nel frontend
-      none         → 0 fonti → categoria grigia
+    Ritorna: { score: float|None, criteria_met: bool, tier_used: int|None,
+               t1: int, t2: int, t3: int }
+    """
+    published = [r for r in css_rows if r.get("status") == "published"]
+    t1 = [r for r in published if r.get("tier") == 1]
+    t2 = [r for r in published if r.get("tier") == 2]
+    t3 = [r for r in published if r.get("tier", 3) == 3]
+
+    def avg(rows): return sum(r["value"] for r in rows) / len(rows)
+
+    if t1:
+        score = avg(t1)
+        tier_used = 1
+        criteria_met = True
+    elif len(t2) >= 2:
+        score = avg(t2)
+        tier_used = 2
+        criteria_met = True
+    elif len(t2) == 1 and len(t3) >= 3:
+        t3_avg = avg(t3)
+        score = (t2[0]["value"] + t3_avg) / 2
+        tier_used = 2
+        criteria_met = True
+    else:
+        score = None
+        tier_used = None
+        criteria_met = False
+
+    # Cap a ±20
+    if score is not None:
+        score = max(-20.0, min(20.0, round(score, 2)))
+
+    return {
+        "score": score,
+        "criteria_met": criteria_met,
+        "tier_used": tier_used,
+        "t1": len(t1), "t2": len(t2), "t3": len(t3),
+    }
+
+
+def compute_brand_score_v2(brand_id: int) -> dict:
+    """
+    Calcola il punteggio totale V2 per un brand (-400/+400).
+    Recupera tutti i criterion_source_scores published dal DB,
+    applica compute_criterion_score per criterio,
+    somma i criteri che hanno raggiunto la soglia.
+    Salva total_score_v2 e criteria_published in brands.
+    Salva computed_score e criteria_met in brand_scores.
+    """
+    css_res = supabase.table("criterion_source_scores")        .select("criterion_id, tier, value, status, scoring_criteria(category_key)")        .eq("brand_id", brand_id)        .execute()
+    all_css = css_res.data or []
+
+    # Raggruppa per criterion_id
+    by_criterion = {}
+    for row in all_css:
+        cid = row["criterion_id"]
+        if cid not in by_criterion:
+            by_criterion[cid] = []
+        by_criterion[cid].append(row)
+
+    total = 0.0
+    criteria_published = 0
+    criterion_results = {}
+
+    for cid, rows in by_criterion.items():
+        result = compute_criterion_score(rows)
+        criterion_results[cid] = result
+        if result["criteria_met"] and result["score"] is not None:
+            total += result["score"]
+            criteria_published += 1
+            # Salva computed_score in brand_scores
+            supabase.table("brand_scores").upsert({
+                "brand_id": brand_id,
+                "criterion_id": cid,
+                "computed_score": result["score"],
+                "criteria_met": True,
+                "status": "published",
+                "last_updated": "now()",
+            }, on_conflict="brand_id,criterion_id").execute()
+
+    total_rounded = round(total, 1)
+
+    # Salva in brands
+    supabase.table("brands").update({
+        "total_score_v2": total_rounded,
+        "criteria_published": criteria_published,
+        "last_updated": "now()",
+    }).eq("id", brand_id).execute()
+
+    return {
+        "total_score_v2": total_rounded,
+        "criteria_published": criteria_published,
+        "criterion_results": criterion_results,
+    }
+
+
+def get_verdict(score: float, lang: str = "en") -> dict:
+    """Ritorna emoji, label e fascia per un punteggio V2."""
+    for low, high, label_en, label_it, emoji in VERDICTS:
+        if low <= score <= high:
+            return {
+                "label": label_en if lang == "en" else label_it,
+                "emoji": emoji,
+                "band": label_en,
+            }
+    # Fallback (non dovrebbe accadere)
+    return {"label": "Unknown", "emoji": "❓", "band": "Unknown"}
+
+
+def source_confidence_v2(css_rows: list) -> dict:
+    """
+    Confidence per categoria basata su criterion_source_scores.
+    Usa le stesse regole di compute_criterion_score.
     """
     from datetime import datetime, timezone, timedelta
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
 
-    # raggruppa per categoria
+    result = {}
+    for cat in CATS:
+        cat_rows = [r for r in css_rows if
+                    (r.get("scoring_criteria") or {}).get("category_key") == cat
+                    and r.get("status") == "published"]
+
+        t1 = sum(1 for r in cat_rows if r.get("tier") == 1)
+        t2 = sum(1 for r in cat_rows if r.get("tier") == 2)
+        t3 = sum(1 for r in cat_rows if r.get("tier", 3) == 3)
+        total = len(cat_rows)
+
+        # Criteria met?
+        met = t1 >= 1 or t2 >= 2 or (t2 == 1 and t3 >= 3)
+
+        if t1 >= 2 or (t1 == 1 and t2 >= 1):
+            level = "high"
+        elif t1 == 1 or t2 >= 2:
+            level = "medium"
+        elif total >= 1:
+            level = "low"
+        else:
+            level = "none"
+
+        result[cat] = {
+            "level": level,
+            "criteria_met": met,
+            "label_en": {"high": "High confidence", "medium": "Medium confidence",
+                         "low": "Low confidence", "none": "No sources yet"}[level],
+            "label_it": {"high": "Alta affidabilità", "medium": "Attendibilità media",
+                         "low": "Bassa affidabilità", "none": "Nessuna fonte"}[level],
+            "count": total,
+            "t1": t1, "t2": t2, "t3": t3,
+        }
+    return result
+
+
+# Legacy wrapper — mantenuto per compatibilità
+def weighted_confidence(sources: list) -> dict:
+    """
+    Wrapper legacy — usa source_confidence_v2 se possibile,
+    altrimenti fallback sul conteggio semplice.
+    """
+    from datetime import datetime, timezone, timedelta
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
     grouped = {}
     for s in sources:
         key = s.get("category_key")
@@ -89,11 +272,9 @@ def weighted_confidence(sources: list) -> dict:
         grouped[key].append(s)
 
     result = {}
-    for cat in ["armi", "ambiente", "diritti", "fisco"]:
+    for cat in CATS:
         cat_sources = grouped.get(cat, [])
         count = len(cat_sources)
-
-        # conta fonti fresche (entro FRESHNESS_MONTHS)
         fresh_count = 0
         for s in cat_sources:
             pub = s.get("published_at")
@@ -105,76 +286,32 @@ def weighted_confidence(sources: list) -> dict:
                 except Exception:
                     pass
             else:
-                fresh_count += 1  # se manca data, consideriamo fresca per non penalizzare
+                fresh_count += 1
 
-        # data_status basato su count totale
-        if count >= MIN_SOURCES_PER_CAT:
-            data_status = "ok"
-        elif count == 1:
-            data_status = "insufficient"
-        else:
-            data_status = "none"
-
-        # score pesato per confidence
-        weighted = sum(TIER_WEIGHTS.get(s.get("tier", 3), 1) for s in cat_sources)
         t1 = sum(1 for s in cat_sources if s.get("tier") == 1)
         t2 = sum(1 for s in cat_sources if s.get("tier") == 2)
         t3 = sum(1 for s in cat_sources if s.get("tier", 3) == 3)
+        met = t1 >= 1 or t2 >= 2 or (t2 == 1 and t3 >= 3)
+        weighted = sum(TIER_WEIGHTS.get(s.get("tier", 3), 1) for s in cat_sources)
 
-        if weighted >= 6:
-            level = "high"
-        elif weighted >= 3:
-            level = "medium"
-        elif weighted >= 1:
-            level = "low"
-        else:
-            level = "none"
+        if weighted >= 6:    level = "high"
+        elif weighted >= 3:  level = "medium"
+        elif weighted >= 1:  level = "low"
+        else:                level = "none"
 
         result[cat] = {
             "level": level,
-            "data_status": data_status,        # ok / insufficient / none
-            "fresh_count": fresh_count,        # fonti negli ultimi 18 mesi
+            "criteria_met": met,
+            "data_status": "ok" if met else ("insufficient" if count == 1 else "none"),
+            "fresh_count": fresh_count,
             "label_en": {"high": "High confidence", "medium": "Medium confidence",
                          "low": "Low confidence", "none": "No sources yet"}[level],
             "label_it": {"high": "Alta affidabilità", "medium": "Attendibilità media",
                          "low": "Bassa affidabilità", "none": "Nessuna fonte"}[level],
-            "count": count,
-            "weighted_score": weighted,
+            "count": count, "weighted_score": weighted,
             "tier1": t1, "tier2": t2, "tier3": t3,
         }
     return result
-
-app = FastAPI(
-    title="EthicPrint API",
-    description="API for ethical brand scoring — ethicprint.org",
-    version="2.0.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://ethicprint.org", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ─── UTILS ────────────────────────────────────────────────────────────────────
-
-def apply_translation(brand: dict, translation: dict) -> dict:
-    """Sovrascrive note e alternatives del brand con la traduzione richiesta."""
-    if not translation:
-        return brand
-    if translation.get("note_armi"):
-        brand["note_armi"] = translation["note_armi"]
-    if translation.get("note_ambiente"):
-        brand["note_ambiente"] = translation["note_ambiente"]
-    if translation.get("note_diritti"):
-        brand["note_diritti"] = translation["note_diritti"]
-    if translation.get("note_fisco"):
-        brand["note_fisco"] = translation["note_fisco"]
-    return brand
-
 
 
 async def generate_impact_summary(brand_id: int, brand: dict, sources: list, confidence: dict) -> dict:
@@ -274,25 +411,23 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
 
     sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
 
-    # Confidence e data_status per categoria (basato sulle fonti disponibili)
+    # Confidence per categoria (V2)
     confidence = weighted_confidence(sources)
 
-    # Calcola punteggio totale escludendo categorie con dati insufficienti
-    CATS = ["armi", "ambiente", "diritti", "fisco"]
-    cat_score_map = {
-        "armi":     brand["score_armi"],
-        "ambiente": brand["score_ambiente"],
-        "diritti":  brand["score_diritti"],
-        "fisco":    brand["score_fisco"],
-    }
-    scored_cats = [c for c in CATS if confidence[c]["data_status"] == "ok"]
-    if scored_cats:
-        total_score = round(sum(cat_score_map[c] for c in scored_cats) / len(scored_cats) * 4)
-    else:
-        total_score = None  # nessuna categoria ha dati sufficienti
+    # Punteggio V2: usa total_score_v2 dal DB se disponibile
+    total_score_v2 = brand.get("total_score_v2")
+    criteria_published = brand.get("criteria_published", 0) or 0
 
-    # Brand con meno di 2 categorie scored → dati insufficienti globali
-    insufficient_data = len(scored_cats) < 2
+    # Fallback legacy per retrocompatibilità (brand non ancora ricalcolati)
+    cat_score_map = {
+        "armi":     brand.get("score_armi", 0) or 0,
+        "ambiente": brand.get("score_ambiente", 0) or 0,
+        "diritti":  brand.get("score_diritti", 0) or 0,
+        "fisco":    brand.get("score_fisco", 0) or 0,
+    }
+
+    # insufficient_data = nessun criterio pubblicato con V2
+    insufficient_data = (total_score_v2 is None and criteria_published == 0)
 
     return {
         "id": brand["id"],
@@ -303,8 +438,8 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         "logo": brand["logo"],
         "parent": brand["parent"],
         "scores": cat_score_map,
-        "total_score": total_score,
-        "categories_scored": len(scored_cats),
+        "total_score": total_score_v2,
+        "criteria_published": criteria_published,
         "insufficient_data": insufficient_data,
         "notes": {
             "armi": brand["note_armi"],
@@ -1231,3 +1366,134 @@ def mark_source_resolved(source_id: int):
         "content_missing": False,
     }).eq("id", source_id).execute()
     return {"ok": True}
+
+
+# ─── SCORING V2 ENDPOINTS ────────────────────────────────────────────────────
+
+class CriterionSourceScoreIn(BaseModel):
+    brand_id: int
+    criterion_id: int
+    source_id: Optional[int] = None
+    tier: int  # 1/2/3
+    judgment: str  # positive / prev_positive / prev_negative / negative
+    notes: Optional[str] = None
+
+@app.post("/scoring/criterion-score")
+def add_criterion_source_score(data: CriterionSourceScoreIn):
+    """
+    Aggiunge una valutazione fonte per un criterio.
+    Calcola il valore numerico da tier + judgment,
+    poi ricalcola il punteggio del brand.
+    """
+    if data.tier not in TIER_VALUES:
+        raise HTTPException(status_code=400, detail="tier must be 1, 2 or 3")
+    if data.judgment not in TIER_VALUES[1]:
+        raise HTTPException(status_code=400, detail=f"judgment must be one of {list(TIER_VALUES[1].keys())}")
+
+    value = TIER_VALUES[data.tier][data.judgment]
+    label_en = SCORE_LABELS[data.judgment]["en"]
+    label_it = SCORE_LABELS[data.judgment]["it"]
+
+    try:
+        supabase.table("criterion_source_scores").upsert({
+            "brand_id": data.brand_id,
+            "criterion_id": data.criterion_id,
+            "source_id": data.source_id,
+            "tier": data.tier,
+            "value": value,
+            "label_en": label_en,
+            "label_it": label_it,
+            "notes": data.notes,
+            "status": "published",
+            "updated_at": "now()",
+        }, on_conflict="brand_id,criterion_id,source_id").execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Ricalcola punteggio brand
+    result = compute_brand_score_v2(data.brand_id)
+    return {"ok": True, "value": value, **result}
+
+
+@app.get("/scoring/criterion-scores/{brand_id}")
+def get_criterion_scores(brand_id: int):
+    """
+    Ritorna tutti i criterion_source_scores di un brand,
+    con il punteggio calcolato per criterio.
+    """
+    css_res = supabase.table("criterion_source_scores")\
+        .select("*, scoring_criteria(code, label_en, label_it, category_key), sources(url, title, publisher)")\
+        .eq("brand_id", brand_id)\
+        .eq("status", "published")\
+        .execute()
+    rows = css_res.data or []
+
+    # Raggruppa per criterio
+    by_criterion = {}
+    for r in rows:
+        cid = r["criterion_id"]
+        if cid not in by_criterion:
+            by_criterion[cid] = {"criterion": r.get("scoring_criteria"), "sources": []}
+        by_criterion[cid]["sources"].append({
+            "source": r.get("sources"),
+            "tier": r["tier"],
+            "value": r["value"],
+            "label_en": r["label_en"],
+            "label_it": r["label_it"],
+        })
+
+    # Calcola score per criterio
+    result = []
+    for cid, data in by_criterion.items():
+        css_rows = [{"tier": s["tier"], "value": s["value"], "status": "published"}
+                    for s in data["sources"]]
+        computed = compute_criterion_score(css_rows)
+        result.append({
+            "criterion_id": cid,
+            "criterion": data["criterion"],
+            "computed_score": computed["score"],
+            "criteria_met": computed["criteria_met"],
+            "tier_used": computed["tier_used"],
+            "sources": data["sources"],
+        })
+
+    # Brand total
+    brand_res = supabase.table("brands")\
+        .select("total_score_v2, criteria_published")\
+        .eq("id", brand_id).single().execute()
+    brand = brand_res.data or {}
+
+    return {
+        "brand_id": brand_id,
+        "total_score_v2": brand.get("total_score_v2"),
+        "criteria_published": brand.get("criteria_published", 0),
+        "criteria": result,
+    }
+
+
+@app.post("/scoring/recalculate/{brand_id}")
+def recalculate_brand_score(brand_id: int):
+    """Ricalcola manualmente il punteggio V2 di un brand."""
+    result = compute_brand_score_v2(brand_id)
+    return {"ok": True, "brand_id": brand_id, **result}
+
+
+@app.post("/scoring/recalculate-all")
+def recalculate_all_scores():
+    """Ricalcola i punteggi V2 di tutti i brand (operazione pesante)."""
+    brands_res = supabase.table("brands").select("id").execute()
+    brands = brands_res.data or []
+    results = []
+    for b in brands:
+        try:
+            r = compute_brand_score_v2(b["id"])
+            results.append({"brand_id": b["id"], **r})
+        except Exception as e:
+            results.append({"brand_id": b["id"], "error": str(e)})
+    return {"ok": True, "processed": len(results), "results": results}
+
+
+@app.get("/scoring/verdict")
+def get_score_verdict(score: float, lang: str = "en"):
+    """Ritorna emoji e label per un punteggio V2."""
+    return get_verdict(score, lang)
