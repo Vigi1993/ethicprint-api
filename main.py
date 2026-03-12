@@ -323,11 +323,12 @@ def weighted_confidence(sources: list) -> dict:
     return result
 
 
-async def generate_impact_summary(brand_id: int, brand: dict, sources: list, confidence: dict) -> dict:
+async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: list = None) -> dict:
     """
     Genera una frase di impatto reale in EN e IT per un brand.
-    Basata su punteggi, note e dati di confidence.
+    Usa total_score_v2, criteria_published e i punteggi per criterio.
     Salva in brands.impact_summary_en/it.
+    Richiede almeno 1 criterio pubblicato.
     """
     if not ANTHROPIC_KEY:
         return {}
@@ -336,42 +337,51 @@ async def generate_impact_summary(brand_id: int, brand: dict, sources: list, con
 
     name = brand.get("name", "")
     sector = (brand.get("sectors") or {}).get("label_en", "")
-    scores = {
-        "armi":     brand.get("score_armi", 0),
-        "ambiente": brand.get("score_ambiente", 0),
-        "diritti":  brand.get("score_diritti", 0),
-        "fisco":    brand.get("score_fisco", 0),
-    }
+    total_score = brand.get("total_score_v2")
+    criteria_published = brand.get("criteria_published", 0) or 0
+
+    # Serve almeno 1 criterio con dati reali
+    if total_score is None or criteria_published == 0:
+        return {}
+
+    # Verdetto testuale
+    verdict = get_verdict(total_score)
+    band = verdict["band"]
+
+    # Note testuali per categoria (se disponibili)
     notes = {
         "armi":     brand.get("note_armi", "") or "",
         "ambiente": brand.get("note_ambiente", "") or "",
         "diritti":  brand.get("note_diritti", "") or "",
         "fisco":    brand.get("note_fisco", "") or "",
     }
-    data_ok = [cat for cat in ["armi","ambiente","diritti","fisco"]
-               if confidence.get(cat, {}).get("data_status") == "ok"]
+    notes_text = "\n".join([f"- {cat}: {notes[cat]}" for cat in CATS if notes[cat]])
 
-    if not data_ok:
-        return {}
-
-    cats_scored = ", ".join(data_ok)
-    notes_text = "\n".join([f"- {cat}: {notes[cat]}" for cat in data_ok if notes[cat]])
-    scores_text = "\n".join([f"- {cat}: {scores[cat]}/25" for cat in data_ok])
+    # Punteggi per criterio (se disponibili)
+    criteria_text = ""
+    if criterion_scores:
+        lines = []
+        for c in criterion_scores:
+            if c.get("criteria_met") and c.get("computed_score") is not None:
+                label = (c.get("criterion") or {}).get("label_en", f"criterion {c.get('criterion_id')}")
+                score = c.get("computed_score")
+                lines.append(f"  - {label}: {'+' if score > 0 else ''}{score}/20")
+        if lines:
+            criteria_text = "Criteria scores (−20 to +20):\n" + "\n".join(lines)
 
     prompt = f"""You are writing a concise ethical impact summary for EthicPrint, a brand ethics scoring tool.
 
 Brand: {name}
 Sector: {sector}
-Categories with sufficient data: {cats_scored}
+Overall score: {total_score} out of ±400 → verdict: {band}
+Criteria with published scores: {criteria_published}/20
 
-Scores (out of 25 per category):
-{scores_text}
+{criteria_text}
 
-Notes:
-{notes_text}
+{("Notes:\n" + notes_text) if notes_text else ""}
 
 Write TWO short sentences (max 35 words each) that tell a consumer the CONCRETE ethical impact of choosing or avoiding this brand.
-Be specific, factual, and direct. No marketing language. Focus on what matters most based on the data.
+Be specific, factual, and direct. No marketing language. Focus on the strongest signal in the data.
 
 Return ONLY valid JSON:
 {{"en": "English sentence here.", "it": "Frase italiana qui."}}"""
@@ -664,14 +674,36 @@ async def get_brand(
     # Confidence pesata per tier — tier1=3pts, tier2=2pts, tier3=1pt
     formatted["confidence"] = weighted_confidence(sources_res.data or [])
 
-    # Genera impact summary se mancante e ci sono dati sufficienti
+    # Genera impact summary se mancante e ci sono dati V2 sufficienti
     if not brand_res.data.get("impact_summary_en") and background_tasks and ANTHROPIC_KEY:
+        # Recupera criterion_scores per il prompt
+        try:
+            css_res = supabase.table("criterion_source_scores")                .select("*, scoring_criteria(label_en, category_key)")                .eq("brand_id", brand_id)                .eq("status", "published")                .execute()
+            css_rows = css_res.data or []
+            # Costruisce lista con computed_score per criterio
+            by_crit = {}
+            for r in css_rows:
+                cid = r["criterion_id"]
+                if cid not in by_crit:
+                    by_crit[cid] = {"criterion": r.get("scoring_criteria"), "rows": []}
+                by_crit[cid]["rows"].append(r)
+            criterion_scores = []
+            for cid, d in by_crit.items():
+                comp = compute_criterion_score(d["rows"])
+                criterion_scores.append({
+                    "criterion_id": cid,
+                    "criterion": d["criterion"],
+                    "computed_score": comp["score"],
+                    "criteria_met": comp["criteria_met"],
+                })
+        except Exception:
+            criterion_scores = []
+
         background_tasks.add_task(
             generate_impact_summary,
             brand_id,
             brand_res.data,
-            sources_res.data or [],
-            formatted["confidence"],
+            criterion_scores,
         )
 
     sector_id = brand_res.data.get("sector_id")
