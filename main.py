@@ -25,6 +25,8 @@ DEFAULT_LANG = "en"
 # Tier 3 = blog, fonti minori, non verificate (peso 1)
 
 TIER_WEIGHTS = {1: 3, 2: 2, 3: 1}
+MIN_SOURCES_PER_CAT = 2   # soglia minima fonti approvate per contribuire al punteggio
+FRESHNESS_MONTHS = 18     # finestra freshness in mesi
 
 # Cache publishers from DB (refreshed every hour)
 _publishers_cache: dict = {}
@@ -69,9 +71,15 @@ def weighted_confidence(sources: list) -> dict:
       medium → ≥ 3  (es. 1× tier1, o 3× tier3)
       low    → ≥ 1
       none   → 0
-    Una singola fonte Tier 1 = medium (peso 3 ≥ 3).
-    Due fonti Tier 1 = high (peso 6 ≥ 6).
+
+    data_status per categoria:
+      ok           → ≥ MIN_SOURCES_PER_CAT fonti → contribuisce al totale
+      insufficient → 1 fonte → non contribuisce, segnalato nel frontend
+      none         → 0 fonti → categoria grigia
     """
+    from datetime import datetime, timezone, timedelta
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
+
     # raggruppa per categoria
     grouped = {}
     for s in sources:
@@ -84,9 +92,31 @@ def weighted_confidence(sources: list) -> dict:
     for cat in ["armi", "ambiente", "diritti", "fisco"]:
         cat_sources = grouped.get(cat, [])
         count = len(cat_sources)
-        # score pesato
+
+        # conta fonti fresche (entro FRESHNESS_MONTHS)
+        fresh_count = 0
+        for s in cat_sources:
+            pub = s.get("published_at")
+            if pub:
+                try:
+                    pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                    if pub_dt >= freshness_cutoff:
+                        fresh_count += 1
+                except Exception:
+                    pass
+            else:
+                fresh_count += 1  # se manca data, consideriamo fresca per non penalizzare
+
+        # data_status basato su count totale
+        if count >= MIN_SOURCES_PER_CAT:
+            data_status = "ok"
+        elif count == 1:
+            data_status = "insufficient"
+        else:
+            data_status = "none"
+
+        # score pesato per confidence
         weighted = sum(TIER_WEIGHTS.get(s.get("tier", 3), 1) for s in cat_sources)
-        # breakdown per tier
         t1 = sum(1 for s in cat_sources if s.get("tier") == 1)
         t2 = sum(1 for s in cat_sources if s.get("tier") == 2)
         t3 = sum(1 for s in cat_sources if s.get("tier", 3) == 3)
@@ -102,6 +132,8 @@ def weighted_confidence(sources: list) -> dict:
 
         result[cat] = {
             "level": level,
+            "data_status": data_status,        # ok / insufficient / none
+            "fresh_count": fresh_count,        # fonti negli ultimi 18 mesi
             "label_en": {"high": "High confidence", "medium": "Medium confidence",
                          "low": "Low confidence", "none": "No sources yet"}[level],
             "label_it": {"high": "Alta affidabilità", "medium": "Attendibilità media",
@@ -165,6 +197,26 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
 
     sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
 
+    # Confidence e data_status per categoria (basato sulle fonti disponibili)
+    confidence = weighted_confidence(sources)
+
+    # Calcola punteggio totale escludendo categorie con dati insufficienti
+    CATS = ["armi", "ambiente", "diritti", "fisco"]
+    cat_score_map = {
+        "armi":     brand["score_armi"],
+        "ambiente": brand["score_ambiente"],
+        "diritti":  brand["score_diritti"],
+        "fisco":    brand["score_fisco"],
+    }
+    scored_cats = [c for c in CATS if confidence[c]["data_status"] == "ok"]
+    if scored_cats:
+        total_score = round(sum(cat_score_map[c] for c in scored_cats) / len(scored_cats) * 4)
+    else:
+        total_score = None  # nessuna categoria ha dati sufficienti
+
+    # Brand con meno di 2 categorie scored → dati insufficienti globali
+    insufficient_data = len(scored_cats) < 2
+
     return {
         "id": brand["id"],
         "name": brand["name"],
@@ -173,12 +225,10 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         "sector_icon": sector.get("icon", ""),
         "logo": brand["logo"],
         "parent": brand["parent"],
-        "scores": {
-            "armi": brand["score_armi"],
-            "ambiente": brand["score_ambiente"],
-            "diritti": brand["score_diritti"],
-            "fisco": brand["score_fisco"],
-        },
+        "scores": cat_score_map,
+        "total_score": total_score,
+        "categories_scored": len(scored_cats),
+        "insufficient_data": insufficient_data,
         "notes": {
             "armi": brand["note_armi"],
             "ambiente": brand["note_ambiente"],
@@ -186,6 +236,7 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
             "fisco": brand["note_fisco"],
         },
         "sources": grouped_sources,
+        "confidence": confidence,
         "alternatives": [],  # populated by smart_alternatives()
         "last_updated": brand["last_updated"],
     }
