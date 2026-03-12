@@ -1090,7 +1090,7 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
 
 # ─── CONTRIBUTION ENDPOINTS ───────────────────────────────────────────────────
 
-from pydantic import BaseModel as PydanticBase
+from pydantic import BaseModel, BaseModel as PydanticBase
 from typing import Optional as Opt
 
 class BrandProposalIn(PydanticBase):
