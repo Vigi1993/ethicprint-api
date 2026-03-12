@@ -1153,9 +1153,68 @@ class ErrorReportIn(PydanticBase):
     source_url: Opt[str] = None
     submitter: Opt[str] = None
 
+# ─── CONTRIBUTION NOTIFICATIONS ──────────────────────────────────────────────
+
+async def notify_contribution(type: str, data: dict):
+    """Manda email a NOTIFY_EMAIL quando arriva una contribuzione pubblica."""
+    resend_key = os.getenv("RESEND_KEY")
+    notify_email = os.getenv("NOTIFY_EMAIL")
+    if not resend_key or not notify_email:
+        return
+
+    icons = {"brand": "🏷️", "source": "🔗", "error": "🚨"}
+    titles = {
+        "brand":  "New brand proposal",
+        "source": "New source proposal",
+        "error":  "New error report",
+    }
+    icon = icons.get(type, "📬")
+    title = titles.get(type, "New contribution")
+
+    # Costruisci righe dettaglio
+    rows = ""
+    for key, val in data.items():
+        if val:
+            rows += f"<tr><td style='padding:6px 10px;color:#666;font-size:12px;white-space:nowrap'>{key}</td><td style='padding:6px 10px;font-size:12px'>{val}</td></tr>"
+
+    html = f"""<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a2e">
+  <div style="background:#0f1a14;padding:18px 24px;border-radius:12px 12px 0 0;border-bottom:2px solid #63CAB7">
+    <h2 style="color:#63CAB7;margin:0;font-size:16px;font-weight:600">{icon} EthicPrint — {title}</h2>
+    <p style="color:rgba(255,255,255,0.4);margin:4px 0 0;font-size:12px">{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>
+  </div>
+  <div style="background:#fff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;padding:20px">
+    <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">
+      {rows}
+    </table>
+    <div style="margin-top:20px;text-align:center">
+      <a href="https://ethicprint.org/admin.html" style="display:inline-block;background:#0f1a14;color:#63CAB7;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;border:1px solid #63CAB7">
+        Review in admin →
+      </a>
+    </div>
+  </div>
+</div>"""
+
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient() as c:
+            await c.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                json={
+                    "from": "EthicPrint <checker@ethicprint.org>",
+                    "to": [notify_email],
+                    "subject": f"EthicPrint: {title}",
+                    "html": html,
+                },
+                timeout=10,
+            )
+    except Exception as e:
+        print(f"notify_contribution failed: {e}")
+
+
 
 @app.post("/contribute/brand")
-def propose_brand(data: BrandProposalIn):
+async def propose_brand(data: BrandProposalIn, background_tasks: BackgroundTasks):
     """Proposta pubblica di un nuovo brand da aggiungere."""
     if not data.name or len(data.name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Brand name too short")
@@ -1168,21 +1227,28 @@ def propose_brand(data: BrandProposalIn):
             "submitter": data.submitter,
             "status": "pending",
         }).execute()
-        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+        new_id = res.data[0]["id"] if res.data else None
+        background_tasks.add_task(notify_contribution, "brand", {
+            "Brand": data.name.strip(),
+            "Sector": data.sector_key or "—",
+            "Website": data.website or "—",
+            "Reason": data.reason or "—",
+            "Submitted by": data.submitter or "anonymous",
+        })
+        return {"ok": True, "id": new_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/contribute/source")
-def propose_source_public(data: SourceProposalIn):
+async def propose_source_public(data: SourceProposalIn, background_tasks: BackgroundTasks):
     """Proposta pubblica di una nuova fonte per un brand esistente."""
     if not data.url or not data.url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid URL")
-    # Controlla che il brand esista
-    brand = supabase.table("brands").select("id").eq("id", data.brand_id).limit(1).execute()
-    if not brand.data:
+    brand_res = supabase.table("brands").select("id, name").eq("id", data.brand_id).limit(1).execute()
+    if not brand_res.data:
         raise HTTPException(status_code=404, detail="Brand not found")
-    # Controlla duplicati
+    brand_name = brand_res.data[0].get("name", str(data.brand_id))
     existing = supabase.table("sources").select("id").eq("url", data.url).execute()
     existing_prop = supabase.table("source_proposals").select("id").eq("url", data.url).execute()
     if existing.data or existing_prop.data:
@@ -1198,19 +1264,29 @@ def propose_source_public(data: SourceProposalIn):
             "status": "pending",
             "job_type": "new",
         }).execute()
-        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+        new_id = res.data[0]["id"] if res.data else None
+        background_tasks.add_task(notify_contribution, "source", {
+            "Brand": brand_name,
+            "Category": data.category_key or "—",
+            "URL": data.url,
+            "Title": data.title or "—",
+            "Publisher": data.publisher or "—",
+            "Submitted by": data.submitter or "anonymous",
+        })
+        return {"ok": True, "id": new_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/contribute/error")
-def report_error(data: ErrorReportIn):
+async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
     """Segnalazione pubblica di un errore su un brand esistente."""
     if not data.description or len(data.description.strip()) < 10:
         raise HTTPException(status_code=400, detail="Description too short")
-    brand = supabase.table("brands").select("id").eq("id", data.brand_id).limit(1).execute()
-    if not brand.data:
+    brand_res = supabase.table("brands").select("id, name").eq("id", data.brand_id).limit(1).execute()
+    if not brand_res.data:
         raise HTTPException(status_code=404, detail="Brand not found")
+    brand_name = brand_res.data[0].get("name", str(data.brand_id))
     try:
         res = supabase.table("error_reports").insert({
             "brand_id": data.brand_id,
@@ -1220,7 +1296,15 @@ def report_error(data: ErrorReportIn):
             "submitter": data.submitter,
             "status": "pending",
         }).execute()
-        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+        new_id = res.data[0]["id"] if res.data else None
+        background_tasks.add_task(notify_contribution, "error", {
+            "Brand": brand_name,
+            "Category": data.category_key or "—",
+            "Description": data.description.strip(),
+            "Source URL": data.source_url or "—",
+            "Submitted by": data.submitter or "anonymous",
+        })
+        return {"ok": True, "id": new_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
