@@ -584,24 +584,28 @@ def get_brands(
 
 
 def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3) -> list:
-    """Ritorna i top N brand dello stesso settore per score, escluso il brand stesso."""
-    res = supabase.table("brands")        .select("id, name, logo, score_armi, score_ambiente, score_diritti, score_fisco, sectors(key, label, label_en, icon)")        .eq("sector_id", sector_id)        .neq("id", brand_id)        .execute()
+    """Ritorna i top N brand dello stesso settore per total_score_v2, escluso il brand stesso.
+    Mostra solo brand con score V2 più alto di quello corrente.
+    Se nessun brand ha score V2, ritorna lista vuota.
+    """
+    res = supabase.table("brands")        .select("id, name, logo, total_score_v2, criteria_published, sectors(key, label, label_en, icon)")        .eq("sector_id", sector_id)        .neq("id", brand_id)        .not_.is_("total_score_v2", "null")        .execute()
 
     brands = res.data or []
 
-    def total_score(b):
-        return (b["score_armi"] + b["score_ambiente"] + b["score_diritti"] + b["score_fisco"]) / 4
-
-    # Calcola score del brand corrente per confronto
-    current_res = supabase.table("brands")        .select("score_armi, score_ambiente, score_diritti, score_fisco")        .eq("id", brand_id).limit(1).execute()
-    current_score = 0
+    # Score del brand corrente
+    current_res = supabase.table("brands")        .select("total_score_v2")        .eq("id", brand_id).limit(1).execute()
+    current_score = None
     if current_res.data:
-        c = current_res.data[0]
-        current_score = (c["score_armi"] + c["score_ambiente"] + c["score_diritti"] + c["score_fisco"]) / 4
+        current_score = current_res.data[0].get("total_score_v2")
 
-    # Ritorna solo brand con score più alto del brand corrente
-    better = [b for b in brands if total_score(b) > current_score]
-    brands_sorted = sorted(better, key=total_score, reverse=True)[:top_n]
+    # Se il brand corrente non ha score V2, mostra i top N del settore
+    # Se ce l'ha, mostra solo quelli con score più alto
+    if current_score is not None:
+        better = [b for b in brands if (b.get("total_score_v2") or -400) > current_score]
+    else:
+        better = brands
+
+    brands_sorted = sorted(better, key=lambda b: b.get("total_score_v2") or -400, reverse=True)[:top_n]
 
     result = []
     for b in brands_sorted:
@@ -611,7 +615,8 @@ def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3)
             "id": b["id"],
             "name": b["name"],
             "logo": b["logo"],
-            "score": round(total_score(b)),
+            "score": b.get("total_score_v2"),
+            "criteria_published": b.get("criteria_published", 0),
             "sector": sector_label,
         })
     return result
