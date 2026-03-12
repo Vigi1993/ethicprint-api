@@ -123,7 +123,7 @@ def compute_criterion_score(css_rows: list) -> dict:
         criteria_met = True
     elif len(t2) == 1 and len(t3) >= 3:
         t3_avg = avg(t3)
-        score = (t2[0]["value"] + t3_avg) / 2
+        score = t2[0]["value"] + t3_avg  # T2 pieno + media T3 come supporto
         tier_used = 2
         criteria_met = True
     else:
@@ -133,7 +133,7 @@ def compute_criterion_score(css_rows: list) -> dict:
 
     # Cap a ±20
     if score is not None:
-        score = max(-20.0, min(20.0, round(score, 2)))
+        score = max(-20, min(20, round(score)))
 
     return {
         "score": score,
