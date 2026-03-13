@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from pydantic import BaseModel
+from typing import Optional, List
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
@@ -1176,17 +1178,14 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
 
 # ─── CONTRIBUTION ENDPOINTS ───────────────────────────────────────────────────
 
-from pydantic import BaseModel, BaseModel as PydanticBase
-from typing import Optional as Opt
-
-class BrandProposalIn(PydanticBase):
+class BrandProposalIn(BaseModel):
     name: str
     sector_key: Opt[str] = None
     website: Opt[str] = None
     reason: Opt[str] = None
     submitter: Opt[str] = None
 
-class SourceProposalIn(PydanticBase):
+class SourceProposalIn(BaseModel):
     brand_id: int
     category_key: str
     url: str
@@ -1195,7 +1194,7 @@ class SourceProposalIn(PydanticBase):
     summary: Opt[str] = None
     submitter: Opt[str] = None
 
-class ErrorReportIn(PydanticBase):
+class ErrorReportIn(BaseModel):
     brand_id: int
     category_key: Opt[str] = None
     description: str
