@@ -80,35 +80,71 @@ async def brave_search(query: str, count: int = 5, job_type: str = "finder") -> 
 
 
 async def evaluate_source(brand_name: str, category_key: str, candidate: dict) -> dict | None:
-    """Chiede a Claude se il candidato è una buona fonte nuova per brand+categoria."""
+    """Chiede a Claude pertinenza + giudizio etico in un'unica chiamata."""
     if not ANTHROPIC_KEY:
         return None
     cat_desc = CATEGORY_LABELS.get(category_key, category_key)
-    prompt = f"""You are evaluating a potential NEW source for EthicPrint, an ethical brand scoring platform.
+
+    # Mappa criteri per categoria per aiutare Claude a suggerire il criterio specifico
+    criteria_map = {
+        "armi":     "arms_production, arms_exports, controversial_clients, military_contracts, dual_use",
+        "diritti":  "labor_rights, supply_chain, discrimination, freedom_expression, indigenous_rights",
+        "ambiente": "co2_emissions, deforestation, pollution, circular_economy, biodiversity",
+        "fisco":    "tax_havens, transfer_pricing, lobbying, transparency, corruption",
+    }
+    criteria_hint = criteria_map.get(category_key, "")
+
+    prompt = f"""You are an ethical analyst for EthicPrint, a platform that scores brands on ethical criteria.
 
 Brand: {brand_name}
 Category: {category_key} ({cat_desc})
-Candidate:
+Possible criteria: {criteria_hint}
+
+Source candidate:
 - URL: {candidate.get('url', '')}
 - Title: {candidate.get('title', '')}
 - Description: {candidate.get('description', '')}
 
-Is this a relevant, credible, recent source about {brand_name}'s {category_key} practices?
-Only approve if it's from a reputable publisher (news outlet, NGO, research institution).
-Reply ONLY with JSON:
-{{"relevant": true/false, "publisher": "publisher name", "summary": "1 sentence explaining relevance"}}"""
+Evaluate this source in TWO steps:
+
+STEP 1 — RELEVANCE: Is this a relevant, credible source about {brand_name}'s {category_key} practices?
+Only approve if from a reputable publisher (news outlet, NGO, research institution, government body).
+
+STEP 2 — ETHICAL JUDGMENT (only if relevant=true): Based on the title and description, does the evidence reflect positively or negatively on {brand_name}?
+Choose exactly one:
+- "Positive" — clear positive evidence (award, certification, major improvement, above-industry standard)
+- "Predominantly positive" — mostly positive but with caveats or partial issues
+- "Predominantly negative" — mostly negative but with some positive aspects or context
+- "Negative" — clear negative evidence (scandal, violation, lawsuit, fine, below-industry standard)
+
+Reply ONLY with valid JSON (no markdown):
+{{
+  "relevant": true or false,
+  "publisher": "publisher name",
+  "summary": "1 sentence explaining what this source says about the brand",
+  "judgment": "Positive" or "Predominantly positive" or "Predominantly negative" or "Negative",
+  "rationale": "2-3 sentences explaining why you chose this judgment based on the content",
+  "criterion": "most specific criterion from the list above, or empty string if unclear"
+}}"""
     try:
         async with httpx.AsyncClient() as c:
             r = await c.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "messages": [{"role": "user", "content": prompt}]},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 400, "messages": [{"role": "user", "content": prompt}]},
                 timeout=30,
             )
             text = r.json()["content"][0]["text"].strip().replace("```json", "").replace("```", "").strip()
-            evaluated = json.loads(text)
-            if evaluated.get("relevant"):
-                return {**candidate, "publisher": evaluated.get("publisher", ""), "summary": evaluated.get("summary", "")}
+            ev = json.loads(text)
+            if ev.get("relevant"):
+                return {
+                    **candidate,
+                    "publisher":    ev.get("publisher", ""),
+                    "summary":      ev.get("summary", ""),
+                    "ai_judgment":  ev.get("judgment", ""),
+                    "ai_rationale": ev.get("rationale", ""),
+                    "ai_criterion": ev.get("criterion", ""),
+                }
     except Exception as e:
         print(f"  ⚠ Claude evaluation failed: {e}")
     return None
@@ -209,6 +245,9 @@ async def find_new_sources(brand: dict) -> int:
                     "title": evaluated.get("title"),
                     "publisher": evaluated.get("publisher"),
                     "summary": evaluated.get("summary"),
+                    "ai_judgment":  evaluated.get("ai_judgment"),
+                    "ai_rationale": evaluated.get("ai_rationale"),
+                    "ai_criterion": evaluated.get("ai_criterion"),
                     "status": "pending",
                     "job_type": "new",
                     "replaces_id": None,
