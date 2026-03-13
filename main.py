@@ -1180,26 +1180,26 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
 
 class BrandProposalIn(BaseModel):
     name: str
-    sector_key: Opt[str] = None
-    website: Opt[str] = None
-    reason: Opt[str] = None
-    submitter: Opt[str] = None
+    sector_key: Optional[str] = None
+    website: Optional[str] = None
+    reason: Optional[str] = None
+    submitter: Optional[str] = None
 
 class SourceProposalIn(BaseModel):
     brand_id: int
     category_key: str
     url: str
-    title: Opt[str] = None
-    publisher: Opt[str] = None
-    summary: Opt[str] = None
-    submitter: Opt[str] = None
+    title: Optional[str] = None
+    publisher: Optional[str] = None
+    summary: Optional[str] = None
+    submitter: Optional[str] = None
 
 class ErrorReportIn(BaseModel):
     brand_id: int
-    category_key: Opt[str] = None
+    category_key: Optional[str] = None
     description: str
-    source_url: Opt[str] = None
-    submitter: Opt[str] = None
+    source_url: Optional[str] = None
+    submitter: Optional[str] = None
 
 # ─── CONTRIBUTION NOTIFICATIONS ──────────────────────────────────────────────
 
