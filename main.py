@@ -30,14 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── TIER PUBLISHER ───────────────────────────────────────────────────────────
-# Tier 1 = fonti autorevoli internazionali (peso 3)
-# Tier 2 = testate nazionali, report ufficiali, dati governativi (peso 2)
-# Tier 3 = blog, fonti minori, non verificate (peso 1)
-
 # ─── SCORING V2 CONSTANTS ────────────────────────────────────────────────────
-# Valori assoluti per tier e giudizio
-# T1: ±20/±10 | T2: ±10/±5 | T3: ±2/±1
 TIER_VALUES = {
     1: {"positive": 20, "prev_positive": 10, "prev_negative": -10, "negative": -20},
     2: {"positive": 10, "prev_positive":  5, "prev_negative":  -5, "negative": -10},
@@ -50,15 +43,10 @@ SCORE_LABELS = {
     "negative":      {"en": "Negative evidence",       "it": "Evidenza negativa"},
 }
 
-# Soglia minima fonti per pubblicare un criterio:
-#   1 T1, oppure ≥2 T2, oppure 1 T2 + ≥3 T3
 FRESHNESS_MONTHS = 18
-
-# Range totale: 20 criteri × max ±20 = ±400
 SCORE_RANGE = 400
 CATS = ["armi", "ambiente", "diritti", "fisco"]
 
-# Fasce verdetto (-400/+400)
 VERDICTS = [
     (200,  400, "Deeply Ethical",        "Profondamente Etico",   "🌿"),
     ( 50,  199, "Fairly Ethical",         "Abbastanza Etico",      "✅"),
@@ -67,16 +55,14 @@ VERDICTS = [
     (-400,-200, "Ethically Compromised",  "Eticamente Inadeguato", "🚫"),
 ]
 
-# Legacy — mantenuto per compatibilità temporanea
 TIER_WEIGHTS = {1: 3, 2: 2, 3: 1}
 MIN_SOURCES_PER_CAT = 2
 
-# Cache publishers from DB (refreshed every hour)
+# ─── PUBLISHER CACHE ─────────────────────────────────────────────────────────
 _publishers_cache: dict = {}
 _publishers_cache_time: float = 0
 
 def _load_publishers() -> dict:
-    """Carica i publisher dal DB e li mette in cache per 1 ora."""
     import time
     global _publishers_cache, _publishers_cache_time
     now = time.time()
@@ -94,29 +80,18 @@ def _load_publishers() -> dict:
     return _publishers_cache
 
 def detect_tier(publisher: str) -> int:
-    """Assegna il tier in base al publisher dal DB. Fallback tier 3."""
     if not publisher:
         return 3
     p = publisher.lower().strip()
     publishers = _load_publishers()
-    # Match esatto o parziale (es. "The Guardian" dentro "The Guardian - International")
     for name, tier in publishers.items():
         if name in p or p in name:
             return tier
     return 3
 
-def compute_criterion_score(css_rows: list) -> dict:
-    """
-    Calcola il punteggio di un criterio dato un insieme di criterion_source_scores.
-    Logica a cascata:
-      1. Ha T1 → media valori T1
-      2. No T1, ≥2 T2 → media valori T2
-      3. No T1, 1 T2 + ≥3 T3 → media(T3) poi media con T2
-      4. Altrimenti → non pubblicato
 
-    Ritorna: { score: float|None, criteria_met: bool, tier_used: int|None,
-               t1: int, t2: int, t3: int }
-    """
+# ─── SCORING LOGIC ───────────────────────────────────────────────────────────
+def compute_criterion_score(css_rows: list) -> dict:
     published = [r for r in css_rows if r.get("status") == "published"]
     t1 = [r for r in published if r.get("tier") == 1]
     t2 = [r for r in published if r.get("tier") == 2]
@@ -134,7 +109,7 @@ def compute_criterion_score(css_rows: list) -> dict:
         criteria_met = True
     elif len(t2) == 1 and len(t3) >= 3:
         t3_avg = avg(t3)
-        score = t2[0]["value"] + t3_avg  # T2 pieno + media T3 come supporto
+        score = t2[0]["value"] + t3_avg
         tier_used = 2
         criteria_met = True
     else:
@@ -142,7 +117,6 @@ def compute_criterion_score(css_rows: list) -> dict:
         tier_used = None
         criteria_met = False
 
-    # Cap a ±20
     if score is not None:
         score = max(-20, min(20, round(score)))
 
@@ -155,18 +129,12 @@ def compute_criterion_score(css_rows: list) -> dict:
 
 
 def compute_brand_score_v2(brand_id: int) -> dict:
-    """
-    Calcola il punteggio totale V2 per un brand (-400/+400).
-    Recupera tutti i criterion_source_scores published dal DB,
-    applica compute_criterion_score per criterio,
-    somma i criteri che hanno raggiunto la soglia.
-    Salva total_score_v2 e criteria_published in brands.
-    Salva computed_score e criteria_met in brand_scores.
-    """
-    css_res = supabase.table("criterion_source_scores")        .select("criterion_id, tier, value, status, scoring_criteria(category_key)")        .eq("brand_id", brand_id)        .execute()
+    css_res = supabase.table("criterion_source_scores") \
+        .select("criterion_id, tier, value, status, scoring_criteria(category_key)") \
+        .eq("brand_id", brand_id) \
+        .execute()
     all_css = css_res.data or []
 
-    # Raggruppa per criterion_id
     by_criterion = {}
     for row in all_css:
         cid = row["criterion_id"]
@@ -184,7 +152,6 @@ def compute_brand_score_v2(brand_id: int) -> dict:
         if result["criteria_met"] and result["score"] is not None:
             total += result["score"]
             criteria_published += 1
-            # Salva computed_score in brand_scores
             supabase.table("brand_scores").upsert({
                 "brand_id": brand_id,
                 "criterion_id": cid,
@@ -196,7 +163,6 @@ def compute_brand_score_v2(brand_id: int) -> dict:
 
     total_rounded = round(total, 1)
 
-    # Salva in brands
     supabase.table("brands").update({
         "total_score_v2": total_rounded,
         "criteria_published": criteria_published,
@@ -211,40 +177,25 @@ def compute_brand_score_v2(brand_id: int) -> dict:
 
 
 def get_verdict(score: float, lang: str = "en") -> dict:
-    """Ritorna emoji, label e fascia per un punteggio V2."""
     for low, high, label_en, label_it, emoji in VERDICTS:
         if low <= score <= high:
-            return {
-                "label": label_en if lang == "en" else label_it,
-                "emoji": emoji,
-                "band": label_en,
-            }
-    # Fallback (non dovrebbe accadere)
+            return {"label": label_en if lang == "en" else label_it, "emoji": emoji, "band": label_en}
     return {"label": "Unknown", "emoji": "❓", "band": "Unknown"}
 
 
 def source_confidence_v2(css_rows: list) -> dict:
-    """
-    Confidence per categoria basata su criterion_source_scores.
-    Usa le stesse regole di compute_criterion_score.
-    """
     from datetime import datetime, timezone, timedelta
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
-
     result = {}
     for cat in CATS:
         cat_rows = [r for r in css_rows if
                     (r.get("scoring_criteria") or {}).get("category_key") == cat
                     and r.get("status") == "published"]
-
         t1 = sum(1 for r in cat_rows if r.get("tier") == 1)
         t2 = sum(1 for r in cat_rows if r.get("tier") == 2)
         t3 = sum(1 for r in cat_rows if r.get("tier", 3) == 3)
         total = len(cat_rows)
-
-        # Criteria met?
         met = t1 >= 1 or t2 >= 2 or (t2 == 1 and t3 >= 3)
-
         if t1 >= 2 or (t1 == 1 and t2 >= 1):
             level = "high"
         elif t1 == 1 or t2 >= 2:
@@ -253,26 +204,18 @@ def source_confidence_v2(css_rows: list) -> dict:
             level = "low"
         else:
             level = "none"
-
         result[cat] = {
-            "level": level,
-            "criteria_met": met,
+            "level": level, "criteria_met": met,
             "label_en": {"high": "High confidence", "medium": "Medium confidence",
                          "low": "Low confidence", "none": "No sources yet"}[level],
             "label_it": {"high": "Alta affidabilità", "medium": "Attendibilità media",
                          "low": "Bassa affidabilità", "none": "Nessuna fonte"}[level],
-            "count": total,
-            "t1": t1, "t2": t2, "t3": t3,
+            "count": total, "t1": t1, "t2": t2, "t3": t3,
         }
     return result
 
 
-# Legacy wrapper — mantenuto per compatibilità
 def weighted_confidence(sources: list) -> dict:
-    """
-    Wrapper legacy — usa source_confidence_v2 se possibile,
-    altrimenti fallback sul conteggio semplice.
-    """
     from datetime import datetime, timezone, timedelta
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
     grouped = {}
@@ -281,7 +224,6 @@ def weighted_confidence(sources: list) -> dict:
         if key not in grouped:
             grouped[key] = []
         grouped[key].append(s)
-
     result = {}
     for cat in CATS:
         cat_sources = grouped.get(cat, [])
@@ -298,21 +240,17 @@ def weighted_confidence(sources: list) -> dict:
                     pass
             else:
                 fresh_count += 1
-
         t1 = sum(1 for s in cat_sources if s.get("tier") == 1)
         t2 = sum(1 for s in cat_sources if s.get("tier") == 2)
         t3 = sum(1 for s in cat_sources if s.get("tier", 3) == 3)
         met = t1 >= 1 or t2 >= 2 or (t2 == 1 and t3 >= 3)
         weighted = sum(TIER_WEIGHTS.get(s.get("tier", 3), 1) for s in cat_sources)
-
         if weighted >= 6:    level = "high"
         elif weighted >= 3:  level = "medium"
         elif weighted >= 1:  level = "low"
         else:                level = "none"
-
         result[cat] = {
-            "level": level,
-            "criteria_met": met,
+            "level": level, "criteria_met": met,
             "data_status": "ok" if met else ("insufficient" if count == 1 else "none"),
             "fresh_count": fresh_count,
             "label_en": {"high": "High confidence", "medium": "Medium confidence",
@@ -326,31 +264,17 @@ def weighted_confidence(sources: list) -> dict:
 
 
 async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: list = None) -> dict:
-    """
-    Genera una frase di impatto reale in EN e IT per un brand.
-    Usa total_score_v2, criteria_published e i punteggi per criterio.
-    Salva in brands.impact_summary_en/it.
-    Richiede almeno 1 criterio pubblicato.
-    """
     if not ANTHROPIC_KEY:
         return {}
-
     import httpx as _httpx
-
     name = brand.get("name", "")
     sector = (brand.get("sectors") or {}).get("label_en", "")
     total_score = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
-
-    # Serve almeno 1 criterio con dati reali
     if total_score is None or criteria_published == 0:
         return {}
-
-    # Verdetto testuale
     verdict = get_verdict(total_score)
     band = verdict["band"]
-
-    # Note testuali per categoria (se disponibili)
     notes = {
         "armi":     brand.get("note_armi", "") or "",
         "ambiente": brand.get("note_ambiente", "") or "",
@@ -358,8 +282,6 @@ async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: 
         "fisco":    brand.get("note_fisco", "") or "",
     }
     notes_text = "\n".join([f"- {cat}: {notes[cat]}" for cat in CATS if notes[cat]])
-
-    # Punteggi per criterio (se disponibili)
     criteria_text = ""
     if criterion_scores:
         lines = []
@@ -370,7 +292,6 @@ async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: 
                 lines.append(f"  - {label}: {'+' if score > 0 else ''}{score}/20")
         if lines:
             criteria_text = "Criteria scores (−20 to +20):\n" + "\n".join(lines)
-
     prompt = f"""You are writing a concise ethical impact summary for EthicPrint, a brand ethics scoring tool.
 
 Brand: {name}
@@ -387,7 +308,6 @@ Be specific, factual, and direct. No marketing language. Focus on the strongest 
 
 Return ONLY valid JSON:
 {{"en": "English sentence here.", "it": "Frase italiana qui."}}"""
-
     try:
         async with _httpx.AsyncClient() as c:
             r = await c.post(
@@ -411,11 +331,10 @@ Return ONLY valid JSON:
         print(f"generate_impact_summary error: {e}")
         return {}
 
+
 def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
-    """Trasforma una riga del DB nel formato usato dal frontend."""
     if translation:
         brand = apply_translation(dict(brand), translation)
-
     sector = brand.get("sectors") or {}
     grouped_sources = {}
     for s in sources:
@@ -429,27 +348,17 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
             "published_at": s["published_at"],
             "tier": s.get("tier", 3),
         })
-
     sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
-
-    # Confidence per categoria (V2)
     confidence = weighted_confidence(sources)
-
-    # Punteggio V2: usa total_score_v2 dal DB se disponibile
     total_score_v2 = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
-
-    # Fallback legacy per retrocompatibilità (brand non ancora ricalcolati)
     cat_score_map = {
         "armi":     brand.get("score_armi", 0) or 0,
         "ambiente": brand.get("score_ambiente", 0) or 0,
         "diritti":  brand.get("score_diritti", 0) or 0,
         "fisco":    brand.get("score_fisco", 0) or 0,
     }
-
-    # insufficient_data = nessun criterio pubblicato con V2
     insufficient_data = (total_score_v2 is None and criteria_published == 0)
-
     return {
         "id": brand["id"],
         "name": brand["name"],
@@ -471,21 +380,27 @@ def format_brand(brand: dict, sources: list = [], translation: dict = None, lang
         "sources": grouped_sources,
         "confidence": confidence,
         "impact_summary": brand.get(f"impact_summary_{lang}") or brand.get("impact_summary_en") or "",
-        "alternatives": [],  # populated by smart_alternatives()
+        "alternatives": [],
         "last_updated": brand["last_updated"],
     }
 
 
+def apply_translation(brand: dict, translation: dict) -> dict:
+    for field in ["note_armi", "note_ambiente", "note_diritti", "note_fisco"]:
+        if translation.get(field):
+            brand[field] = translation[field]
+    return brand
+
+
 def get_translation(brand_id: int, lang: str) -> dict | None:
-    """Recupera la traduzione dal DB. Ritorna None se non esiste."""
     if lang == DEFAULT_LANG:
         return None
     try:
-        res = supabase.table("brand_translations")\
-            .select("*")\
-            .eq("brand_id", brand_id)\
-            .eq("lang", lang)\
-            .limit(1)\
+        res = supabase.table("brand_translations") \
+            .select("*") \
+            .eq("brand_id", brand_id) \
+            .eq("lang", lang) \
+            .limit(1) \
             .execute()
         if res.data and len(res.data) > 0:
             return res.data[0]
@@ -496,13 +411,10 @@ def get_translation(brand_id: int, lang: str) -> dict | None:
 
 
 async def generate_and_save_translation(brand_id: int, brand: dict, lang: str):
-    """Chiama Claude API per generare una traduzione e la salva in brand_translations."""
     if not ANTHROPIC_KEY:
         return
-
     lang_names = {"it": "Italian", "es": "Spanish", "fr": "French", "de": "German"}
     lang_name = lang_names.get(lang, lang)
-
     prompt = f"""Translate the following ethical brand assessment notes from English to {lang_name}.
 Return ONLY a valid JSON object with these exact keys: note_armi, note_ambiente, note_diritti, note_fisco.
 Keep the tone factual and neutral. Do not add or remove information.
@@ -514,21 +426,13 @@ note_ambiente: {brand["note_ambiente"]}
 note_diritti: {brand["note_diritti"]}
 note_fisco: {brand["note_fisco"]}
 """
-
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 1000,
-                    "messages": [{"role": "user", "content": prompt}]
-                },
+                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1000,
+                      "messages": [{"role": "user", "content": prompt}]},
                 timeout=30.0
             )
             data = response.json()
@@ -538,16 +442,13 @@ note_fisco: {brand["note_fisco"]}
                 if text.startswith("json"):
                     text = text[4:]
             translated = json.loads(text.strip())
-
         supabase.table("brand_translations").upsert({
-            "brand_id": brand_id,
-            "lang": lang,
+            "brand_id": brand_id, "lang": lang,
             "note_armi": translated.get("note_armi"),
             "note_ambiente": translated.get("note_ambiente"),
             "note_diritti": translated.get("note_diritti"),
             "note_fisco": translated.get("note_fisco"),
         }, on_conflict="brand_id,lang").execute()
-
     except Exception as e:
         print(f"Translation error for brand {brand_id} lang {lang}: {e}")
 
@@ -565,73 +466,50 @@ def get_brands(
     search: Optional[str] = Query(None),
     lang: Optional[str] = Query("en"),
 ):
-    """Ritorna tutti i brand. Supporta ?lang=it per le traduzioni."""
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-
     query = supabase.table("brands").select("*, sectors(key, label, label_en, icon)")
-
     if sector:
         sector_res = supabase.table("sectors").select("id").eq("key", sector).single().execute()
         if not sector_res.data:
             raise HTTPException(status_code=404, detail=f"Sector '{sector}' not found")
         query = query.eq("sector_id", sector_res.data["id"])
-
     res = query.order("name").execute()
     brands = res.data or []
-
     if search:
         search_lower = search.lower()
         brands = [b for b in brands if search_lower in b["name"].lower()]
-
     if lang != DEFAULT_LANG:
-        translations_res = supabase.table("brand_translations")\
-            .select("*")\
-            .eq("lang", lang)\
-            .execute()
+        translations_res = supabase.table("brand_translations").select("*").eq("lang", lang).execute()
         translations = {t["brand_id"]: t for t in (translations_res.data or [])}
         return [format_brand(b, translation=translations.get(b["id"]), lang=lang) for b in brands]
-
     return [format_brand(b, lang=lang) for b in brands]
 
 
-
 def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3) -> list:
-    """Ritorna i top N brand dello stesso settore per total_score_v2, escluso il brand stesso.
-    Mostra solo brand con score V2 più alto di quello corrente.
-    Se nessun brand ha score V2, ritorna lista vuota.
-    """
-    res = supabase.table("brands")        .select("id, name, logo, total_score_v2, criteria_published, sectors(key, label, label_en, icon)")        .eq("sector_id", sector_id)        .neq("id", brand_id)        .not_.is_("total_score_v2", "null")        .execute()
-
+    res = supabase.table("brands") \
+        .select("id, name, logo, total_score_v2, criteria_published, sectors(key, label, label_en, icon)") \
+        .eq("sector_id", sector_id).neq("id", brand_id).not_.is_("total_score_v2", "null").execute()
     brands = res.data or []
-
-    # Score del brand corrente
-    current_res = supabase.table("brands")        .select("total_score_v2")        .eq("id", brand_id).limit(1).execute()
+    current_res = supabase.table("brands").select("total_score_v2").eq("id", brand_id).limit(1).execute()
     current_score = None
     if current_res.data:
         current_score = current_res.data[0].get("total_score_v2")
-
-    # Se il brand corrente non ha score V2, mostra i top N del settore
-    # Se ce l'ha, mostra solo quelli con score più alto
     if current_score is not None:
         better = [b for b in brands if (b.get("total_score_v2") or -400) > current_score]
     else:
         better = brands
-
     brands_sorted = sorted(better, key=lambda b: b.get("total_score_v2") or -400, reverse=True)[:top_n]
-
     result = []
     for b in brands_sorted:
         sector = b.get("sectors") or {}
         sector_label = sector.get("label_en", "") if lang == "en" and sector.get("label_en") else sector.get("label", "")
         result.append({
-            "id": b["id"],
-            "name": b["name"],
-            "logo": b["logo"],
-            "score": b.get("total_score_v2"),
-            "criteria_published": b.get("criteria_published", 0),
+            "id": b["id"], "name": b["name"], "logo": b["logo"],
+            "score": b.get("total_score_v2"), "criteria_published": b.get("criteria_published", 0),
             "sector": sector_label,
         })
     return result
+
 
 @app.get("/brands/{brand_id}")
 async def get_brand(
@@ -639,50 +517,26 @@ async def get_brand(
     lang: Optional[str] = Query("en"),
     background_tasks: BackgroundTasks = None,
 ):
-    """Ritorna un singolo brand nella lingua richiesta.
-    Se la traduzione non esiste, la genera in background e ritorna l'inglese."""
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-
-    brand_res = supabase.table("brands")\
-        .select("*, sectors(key, label, label_en, icon)")\
-        .eq("id", brand_id)\
-        .single()\
-        .execute()
-
+    brand_res = supabase.table("brands").select("*, sectors(key, label, label_en, icon)") \
+        .eq("id", brand_id).single().execute()
     if not brand_res.data:
         raise HTTPException(status_code=404, detail="Brand not found")
-
-    sources_res = supabase.table("sources")\
-        .select("id, url, title, publisher, published_at, category_key, tier")\
-        .eq("brand_id", brand_id)\
-        .neq("broken", True)\
-        .neq("content_missing", True)\
-        .order("category_key")\
-        .execute()
-
+    sources_res = supabase.table("sources").select("id, url, title, publisher, published_at, category_key, tier") \
+        .eq("brand_id", brand_id).neq("broken", True).neq("content_missing", True).order("category_key").execute()
     translation = None
     if lang != DEFAULT_LANG:
         translation = get_translation(brand_id, lang)
         if not translation and background_tasks and ANTHROPIC_KEY:
-            background_tasks.add_task(
-                generate_and_save_translation,
-                brand_id,
-                brand_res.data,
-                lang
-            )
-
+            background_tasks.add_task(generate_and_save_translation, brand_id, brand_res.data, lang)
     formatted = format_brand(brand_res.data, sources_res.data or [], translation, lang=lang)
-
-    # Confidence pesata per tier — tier1=3pts, tier2=2pts, tier3=1pt
     formatted["confidence"] = weighted_confidence(sources_res.data or [])
-
-    # Genera impact summary se mancante e ci sono dati V2 sufficienti
     if not brand_res.data.get("impact_summary_en") and background_tasks and ANTHROPIC_KEY:
-        # Recupera criterion_scores per il prompt
         try:
-            css_res = supabase.table("criterion_source_scores")                .select("*, scoring_criteria(label_en, category_key)")                .eq("brand_id", brand_id)                .eq("status", "published")                .execute()
+            css_res = supabase.table("criterion_source_scores") \
+                .select("*, scoring_criteria(label_en, category_key)") \
+                .eq("brand_id", brand_id).eq("status", "published").execute()
             css_rows = css_res.data or []
-            # Costruisce lista con computed_score per criterio
             by_crit = {}
             for r in css_rows:
                 cid = r["criterion_id"]
@@ -693,21 +547,12 @@ async def get_brand(
             for cid, d in by_crit.items():
                 comp = compute_criterion_score(d["rows"])
                 criterion_scores.append({
-                    "criterion_id": cid,
-                    "criterion": d["criterion"],
-                    "computed_score": comp["score"],
-                    "criteria_met": comp["criteria_met"],
+                    "criterion_id": cid, "criterion": d["criterion"],
+                    "computed_score": comp["score"], "criteria_met": comp["criteria_met"],
                 })
         except Exception:
             criterion_scores = []
-
-        background_tasks.add_task(
-            generate_impact_summary,
-            brand_id,
-            brand_res.data,
-            criterion_scores,
-        )
-
+        background_tasks.add_task(generate_impact_summary, brand_id, brand_res.data, criterion_scores)
     sector_id = brand_res.data.get("sector_id")
     if sector_id:
         formatted["alternatives"] = smart_alternatives(brand_id, sector_id, lang)
@@ -716,57 +561,69 @@ async def get_brand(
 
 @app.get("/sectors")
 def get_sectors():
-    res = supabase.table("sectors")\
-        .select("*")\
-        .eq("active", True)\
-        .order("sort_order")\
-        .execute()
+    res = supabase.table("sectors").select("*").eq("active", True).order("sort_order").execute()
     return res.data or []
 
 
 @app.get("/categories")
 def get_categories():
-    res = supabase.table("categories")\
-        .select("*")\
-        .eq("active", True)\
-        .order("sort_order")\
-        .execute()
+    res = supabase.table("categories").select("*").eq("active", True).order("sort_order").execute()
     return res.data or []
 
 
+# ─── SOURCES ─────────────────────────────────────────────────────────────────
+
 @app.get("/brands/{brand_id}/sources")
 def get_brand_sources(brand_id: int):
+    """
+    Ritorna tutte le fonti del brand come array flat.
+    Include le esclusioni per criterio.
+    """
     brand_res = supabase.table("brands").select("id").eq("id", brand_id).single().execute()
     if not brand_res.data:
         raise HTTPException(status_code=404, detail="Brand not found")
 
-    res = supabase.table("sources")\
-        .select("*")\
-        .eq("brand_id", brand_id)\
-        .neq("broken", True)\
-        .neq("content_missing", True)\
-        .order("category_key")\
+    res = supabase.table("sources") \
+        .select("id, url, title, publisher, published_at, category_key, tier") \
+        .eq("brand_id", brand_id) \
+        .neq("broken", True) \
+        .neq("content_missing", True) \
+        .order("category_key") \
         .execute()
 
-    grouped = {}
+    # Carica le esclusioni per questo brand
+    excl_res = supabase.table("source_criterion_exclusions") \
+        .select("source_id, criterion_id") \
+        .eq("brand_id", brand_id) \
+        .execute()
+    exclusions = excl_res.data or []
+
+    # Mappa source_id → [criterion_ids esclusi]
+    excl_map: dict = {}
+    for e in exclusions:
+        sid = e["source_id"]
+        if sid not in excl_map:
+            excl_map[sid] = []
+        excl_map[sid].append(e["criterion_id"])
+
+    sources = []
     for s in (res.data or []):
-        key = s["category_key"]
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append({
+        sources.append({
             "id": s["id"],
             "url": s["url"],
             "title": s["title"],
             "publisher": s["publisher"],
             "published_at": s["published_at"],
+            "category_key": s["category_key"],
+            "tier": s.get("tier", 3),
+            "excluded_from_criteria": excl_map.get(s["id"], []),
         })
 
-    return grouped
+    return {"sources": sources}
 
 
 @app.get("/langs")
 def get_langs():
-    """Ritorna le lingue supportate."""
     return {
         "default": DEFAULT_LANG,
         "supported": SUPPORTED_LANGS,
@@ -774,22 +631,10 @@ def get_langs():
     }
 
 
-@app.post("/suggest")
-def suggest_brand(payload: dict):
-    required = ["name", "sector", "reason"]
-    for field in required:
-        if field not in payload or not payload[field]:
-            raise HTTPException(status_code=422, detail=f"Field '{field}' required")
-    return {
-        "message": "Thanks for the suggestion! It will be reviewed by Marco.",
-        "brand": payload.get("name")
-    }
-
-
 @app.get("/publishers")
 def get_publishers():
-    """Ritorna tutti i publisher trusted, divisi per tier."""
-    res = supabase.table("publishers")        .select("id, name, url, tier, topic")        .eq("active", True)        .order("tier")        .order("name")        .execute()
+    res = supabase.table("publishers").select("id, name, url, tier, topic") \
+        .eq("active", True).order("tier").order("name").execute()
     data = res.data or []
     return {
         "total": len(data),
@@ -801,11 +646,10 @@ def get_publishers():
 
 @app.get("/costs/brave-count")
 def get_brave_count():
-    """Ritorna il conteggio chiamate Brave Search dal DB (incrementato da finder/checker)."""
     now = __import__("datetime").datetime.now()
     month_key = now.strftime("%Y-%m")
     try:
-        res = supabase.table("brave_usage")            .select("*")            .eq("month", month_key)            .limit(1)            .execute()
+        res = supabase.table("brave_usage").select("*").eq("month", month_key).limit(1).execute()
         if res.data:
             row = res.data[0]
             return {
@@ -821,15 +665,10 @@ def get_brave_count():
 
 @app.get("/sources/public")
 def get_public_sources():
-    """Ritorna tutte le fonti valide con brand e tier, per la pagina pubblica."""
-    res = supabase.table("sources")\
-        .select("id, url, title, publisher, published_at, category_key, tier, brand_id, brands(name)")\
-        .neq("broken", True)\
-        .neq("content_missing", True)\
-        .order("tier")\
-        .execute()
+    res = supabase.table("sources") \
+        .select("id, url, title, publisher, published_at, category_key, tier, brand_id, brands(name)") \
+        .neq("broken", True).neq("content_missing", True).order("tier").execute()
     sources = res.data or []
-    # Arricchisci con tier auto-detect se tier è null o mancante
     for s in sources:
         if not s.get("tier"):
             s["tier"] = detect_tier(s.get("publisher", ""))
@@ -837,124 +676,111 @@ def get_public_sources():
     by_tier = {1: [], 2: [], 3: []}
     for s in sources:
         t = s.get("tier", 3)
-        by_tier[t if t in [1,2,3] else 3].append(s)
-    return {
-        "total": total,
-        "tier1": by_tier[1],
-        "tier2": by_tier[2],
-        "tier3": by_tier[3],
-    }
+        by_tier[t if t in [1, 2, 3] else 3].append(s)
+    return {"total": total, "tier1": by_tier[1], "tier2": by_tier[2], "tier3": by_tier[3]}
 
 
 @app.get("/sources/issues")
 def get_source_issues():
-    """Ritorna tutte le fonti con problemi (broken o content_missing) per revisione."""
-    res = supabase.table("sources")\
-        .select("id, url, title, publisher, published_at, broken, content_missing, last_checked, brand_id")\
-        .or_("broken.eq.true,content_missing.eq.true")\
-        .order("last_checked", desc=True)\
+    res = supabase.table("sources") \
+        .select("id, url, title, publisher, published_at, broken, content_missing, last_checked, brand_id, category_key") \
+        .or_("broken.eq.true,content_missing.eq.true") \
+        .order("last_checked", desc=True) \
         .execute()
-    return {
-        "count": len(res.data or []),
-        "issues": res.data or []
-    }
+    return {"count": len(res.data or []), "issues": res.data or []}
 
+
+# ─── SOURCE EXCLUSIONS ───────────────────────────────────────────────────────
+
+class ExclusionIn(BaseModel):
+    brand_id: int
+    criterion_id: int
+
+@app.post("/sources/{source_id}/exclude-criterion")
+def exclude_source_from_criterion(source_id: int, data: ExclusionIn):
+    """Esclude una fonte da un criterio specifico senza rimuoverla dalle altre."""
+    try:
+        supabase.table("source_criterion_exclusions").upsert({
+            "brand_id": data.brand_id,
+            "source_id": source_id,
+            "criterion_id": data.criterion_id,
+        }, on_conflict="brand_id,source_id,criterion_id").execute()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/sources/{source_id}/exclude-criterion/{criterion_id}")
+def remove_exclusion(source_id: int, criterion_id: int, brand_id: int = Query(...)):
+    """Rimuove l'esclusione di una fonte da un criterio."""
+    try:
+        supabase.table("source_criterion_exclusions") \
+            .delete() \
+            .eq("source_id", source_id) \
+            .eq("criterion_id", criterion_id) \
+            .eq("brand_id", brand_id) \
+            .execute()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── SOURCE PROPOSALS ────────────────────────────────────────────────────────
 
 @app.get("/source-proposals")
 def get_source_proposals(status: str = "pending"):
-    """Ritorna le proposte di fonti filtrate per status (pending/approved/rejected)."""
-    res = supabase.table("source_proposals")\
-        .select("*, brands(name)")\
-        .eq("status", status)\
-        .order("created_at", desc=True)\
+    res = supabase.table("source_proposals") \
+        .select("*, brands(name)") \
+        .eq("status", status) \
+        .order("created_at", desc=True) \
         .execute()
     return {"count": len(res.data or []), "proposals": res.data or []}
 
 
-async def analyze_source_for_score(source_id: int, brand_id: int, category_key: str, url: str, title: str, summary: str):
+@app.patch("/source-proposals/{proposal_id}/revert")
+def revert_proposal_to_pending(proposal_id: int):
     """
-    Dopo l'approvazione di una fonte, Claude legge la pagina e suggerisce
-    una modifica al punteggio della categoria. Salva in score_proposals.
-    MAI aggiornamento automatico — richiede approvazione manuale.
+    Riporta una proposta approved o rejected a stato pending.
+    Se era approved, rimuove anche la fonte da sources.
     """
-    if not ANTHROPIC_KEY:
-        return
+    prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
+    if not prop_res.data:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    p = prop_res.data
 
-    # Recupera punteggio attuale del brand
-    brand_res = supabase.table("brands")        .select(f"score_{category_key}, name")        .eq("id", brand_id).single().execute()
-    if not brand_res.data:
-        return
+    if p["status"] == "approved":
+        # Rimuovi la fonte da sources se esiste (cerca per URL e brand_id)
+        src_res = supabase.table("sources") \
+            .select("id") \
+            .eq("brand_id", p["brand_id"]) \
+            .eq("url", p["url"]) \
+            .execute()
+        if src_res.data:
+            source_id = src_res.data[0]["id"]
+            # Rimuovi eventuali criterion_source_scores associati
+            supabase.table("criterion_source_scores") \
+                .delete() \
+                .eq("source_id", source_id) \
+                .execute()
+            # Rimuovi esclusioni
+            supabase.table("source_criterion_exclusions") \
+                .delete() \
+                .eq("source_id", source_id) \
+                .execute()
+            # Rimuovi la fonte
+            supabase.table("sources").delete().eq("id", source_id).execute()
+            # Ricalcola punteggio brand
+            try:
+                compute_brand_score_v2(p["brand_id"])
+            except Exception:
+                pass
 
-    current_score = brand_res.data.get(f"score_{category_key}", 50)
-    brand_name = brand_res.data.get("name", "")
-
-    # Fetch contenuto pagina
-    page_content = ""
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, follow_redirects=True)
-            if r.status_code == 200:
-                page_content = r.text[:6000]
-    except Exception:
-        pass
-
-    cat_descriptions = {
-        "armi": "arms, weapons, military contracts, conflicts",
-        "ambiente": "environment, CO2 emissions, climate, sustainability",
-        "diritti": "human rights, labor rights, workers conditions",
-        "fisco": "tax avoidance, tax haven, fiscal transparency",
-    }
-
-    prompt = f"""You are an ethical analyst for EthicPrint, scoring brands on ethical dimensions.
-
-Brand: {brand_name}
-Category: {category_key} ({cat_descriptions.get(category_key, category_key)})
-Current score: {current_score}/100
-Source title: {title}
-Source summary: {summary}
-Source content (truncated):
-{page_content or "(page not accessible)"}
-
-Based on this source, should the score for {brand_name} on {category_key} change?
-Consider: higher score = more ethical. The source may reveal positive or negative behavior.
-
-Reply ONLY with JSON:
-{{
-  "proposed_score": <integer 0-100>,
-  "motivation": "<2-3 sentences explaining why the score should change, or stay the same>",
-  "direction": "increase" | "decrease" | "unchanged"
-}}"""
-
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
-                      "messages": [{"role": "user", "content": prompt}]},
-                timeout=30,
-            )
-            text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
-            result = json.loads(text)
-            proposed_score = max(0, min(100, int(result.get("proposed_score", current_score))))
-            motivation = result.get("motivation", "")
-
-            supabase.table("score_proposals").insert({
-                "brand_id": brand_id,
-                "category_key": category_key,
-                "source_id": source_id,
-                "current_score": current_score,
-                "proposed_score": proposed_score,
-                "motivation": motivation,
-                "status": "pending",
-            }).execute()
-            print(f"Score proposal saved: {brand_name} / {category_key} {current_score}→{proposed_score}")
-    except Exception as e:
-        print(f"Score analysis failed: {e}")
+    supabase.table("source_proposals").update({"status": "pending"}).eq("id", proposal_id).execute()
+    return {"ok": True, "message": "Proposal reverted to pending"}
 
 
 class ApproveProposalBody(BaseModel):
-    confirmed_judgment: Optional[str] = None  # Positive / Predominantly positive / Predominantly negative / Negative
+    confirmed_judgment: Optional[str] = None
 
 JUDGMENT_VALUES = {
     "Positive":                20,
@@ -970,13 +796,17 @@ JUDGMENT_LABELS_IT = {
 }
 
 @app.post("/source-proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks, body: Optional[ApproveProposalBody] = None):
-    """Approva una proposta: la inserisce in sources, pre-popola il giudizio AI se disponibile."""
+async def approve_proposal(
+    proposal_id: int,
+    background_tasks: BackgroundTasks,
+    body: Optional[ApproveProposalBody] = None,
+):
     prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
         raise HTTPException(status_code=404, detail="Proposal not found")
     p = prop_res.data
 
+    # Usa il tier rilevato dal publisher (fonte di verità)
     tier = detect_tier(p.get("publisher", ""))
 
     # Inserisci in sources
@@ -992,36 +822,35 @@ async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks, 
     }).execute()
     source_id = new_source.data[0]["id"] if new_source.data else None
 
-    # Marca proposta come approvata
-    supabase.table("source_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
+    # Marca proposta come approvata, salva tier rilevato
+    supabase.table("source_proposals").update({
+        "status": "approved",
+        "ai_tier": tier,
+    }).eq("id", proposal_id).execute()
 
     # Se era un sostituto, elimina la fonte originale rotta
     if p.get("replaces_id"):
         supabase.table("sources").delete().eq("id", p["replaces_id"]).execute()
 
-    # Pre-popola criterion_source_scores se c'è un giudizio AI confermato
+    # Pre-popola criterion_source_scores se c'è un giudizio AI
     judgment = (body.confirmed_judgment if body and body.confirmed_judgment else None) or p.get("ai_judgment")
     if source_id and judgment and judgment in JUDGMENT_VALUES:
-        # Determina il valore in base al tier effettivo
-        tier_multipliers = {1: 1.0, 2: 0.5, 3: 0.1}
-        base_val = JUDGMENT_VALUES[judgment]
-        tier_mult = tier_multipliers.get(tier, 0.5)
-        # Valori per tier: T1 ±20/±10, T2 ±10/±5, T3 ±2/±1
         tier_values = {
             1: {20: 20, 10: 10, -10: -10, -20: -20},
             2: {20: 10, 10: 5,  -10: -5,  -20: -10},
             3: {20: 2,  10: 1,  -10: -1,  -20: -2},
         }
-        value = tier_values.get(tier, tier_values[2]).get(base_val, int(base_val * tier_mult))
+        base_val = JUDGMENT_VALUES[judgment]
+        value = tier_values.get(tier, tier_values[2]).get(base_val, base_val)
 
-        # Trova il criterion_id corrispondente alla categoria
-        # Usa ai_criterion se specificato, altrimenti il primo criterio della categoria
         criterion_code = p.get("ai_criterion", "")
         crit_res = None
         if criterion_code:
             crit_res = supabase.table("scoring_criteria").select("id").eq("code", criterion_code).limit(1).execute()
         if not crit_res or not crit_res.data:
-            crit_res = supabase.table("scoring_criteria").select("id").eq("category_key", p["category_key"]).eq("active", True).order("sort_order").limit(1).execute()
+            crit_res = supabase.table("scoring_criteria").select("id") \
+                .eq("category_key", p["category_key"]).eq("active", True) \
+                .order("sort_order").limit(1).execute()
 
         if crit_res and crit_res.data:
             criterion_id = crit_res.data[0]["id"]
@@ -1036,47 +865,41 @@ async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks, 
                     "label_en": judgment,
                     "label_it": label_it,
                     "notes": p.get("ai_rationale", ""),
-                    "status": "draft",  # draft: visibile in admin ma non ancora published
+                    "status": "draft",
                 }, on_conflict="brand_id,criterion_id,source_id").execute()
-                # Ricalcola score brand in background
                 background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
             except Exception as e:
                 print(f"criterion_source_scores upsert failed: {e}")
 
-    return {"message": "Proposal approved.", "judgment_saved": bool(judgment and judgment in JUDGMENT_VALUES)}
+    return {"message": "Proposal approved.", "tier": tier, "judgment_saved": bool(judgment and judgment in JUDGMENT_VALUES)}
 
 
 @app.post("/source-proposals/{proposal_id}/reject")
 def reject_proposal(proposal_id: int):
-    """Rifiuta una proposta."""
     supabase.table("source_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
     return {"message": "Proposal rejected"}
 
 
+# ─── SCORE PROPOSALS ─────────────────────────────────────────────────────────
+
 @app.get("/score-proposals")
 def get_score_proposals(status: str = "pending"):
-    """Ritorna le proposte di modifica punteggio filtrate per status."""
-    res = supabase.table("score_proposals")        .select("*, brands(name), sources(url, title, publisher), scoring_criteria(label_en, label_it, code)")        .eq("status", status)        .order("created_at", desc=True)        .execute()
+    res = supabase.table("score_proposals") \
+        .select("*, brands(name), sources(url, title, publisher), scoring_criteria(label_en, label_it, code)") \
+        .eq("status", status).order("created_at", desc=True).execute()
     return {"count": len(res.data or []), "proposals": res.data or []}
 
 
 @app.post("/score-proposals/{proposal_id}/approve")
 def approve_score_proposal(proposal_id: int):
-    """
-    Approva una proposta di score per una singola voce.
-    Scrive/aggiorna brand_scores, poi ricalcola il punteggio aggregato
-    della categoria in brands.score_*.
-    """
     prop_res = supabase.table("score_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
         raise HTTPException(status_code=404, detail="Proposal not found")
     p = prop_res.data
-
     criterion_id = p.get("criterion_id")
     if not criterion_id:
-        raise HTTPException(status_code=400, detail="Proposal has no criterion_id — legacy proposal not supported")
+        raise HTTPException(status_code=400, detail="Proposal has no criterion_id")
 
-    # Upsert in brand_scores
     supabase.table("brand_scores").upsert({
         "brand_id": p["brand_id"],
         "criterion_id": criterion_id,
@@ -1089,73 +912,55 @@ def approve_score_proposal(proposal_id: int):
         "last_updated": "now()",
     }, on_conflict="brand_id,criterion_id").execute()
 
-    # Ricalcola score aggregato della categoria
-    # Prende tutte le voci published della categoria per questo brand
-    criteria_res = supabase.table("scoring_criteria")        .select("id")        .eq("category_key", p["category_key"])        .eq("active", True)        .execute()
+    criteria_res = supabase.table("scoring_criteria").select("id") \
+        .eq("category_key", p["category_key"]).eq("active", True).execute()
     criterion_ids = [c["id"] for c in (criteria_res.data or [])]
-
-    scores_res = supabase.table("brand_scores")        .select("score")        .eq("brand_id", p["brand_id"])        .eq("status", "published")        .in_("criterion_id", criterion_ids)        .execute()
-
+    scores_res = supabase.table("brand_scores").select("score") \
+        .eq("brand_id", p["brand_id"]).eq("status", "published").in_("criterion_id", criterion_ids).execute()
     scores = [row["score"] for row in (scores_res.data or [])]
-
     if scores:
-        # Media delle voci con evidenza (esclude voci mancanti = 3 neutro non pubblicato)
-        # Converti scala 1-5 in 0-25: (media - 1) / 4 * 25
         avg = sum(scores) / len(scores)
         category_score = round((avg - 1) / 4 * 25)
     else:
-        category_score = 13  # neutro se nessuna voce pubblicata
+        category_score = 13
 
     col = f"score_{p['category_key']}"
-    supabase.table("brands").update({
-        col: category_score,
-        "last_updated": "now()"
-    }).eq("id", p["brand_id"]).execute()
-
+    supabase.table("brands").update({col: category_score, "last_updated": "now()"}).eq("id", p["brand_id"]).execute()
     supabase.table("score_proposals").update({"status": "approved"}).eq("id", proposal_id).execute()
-    return {
-        "message": f"Score updated",
-        "category": p["category_key"],
-        "category_score": category_score,
-        "criteria_scored": len(scores),
-    }
+    return {"message": "Score updated", "category": p["category_key"], "category_score": category_score}
 
 
 @app.post("/score-proposals/{proposal_id}/reject")
 def reject_score_proposal(proposal_id: int):
-    """Rifiuta una proposta di score."""
     supabase.table("score_proposals").update({"status": "rejected"}).eq("id", proposal_id).execute()
     return {"message": "Score proposal rejected"}
 
 
+# ─── SCORING CRITERIA ────────────────────────────────────────────────────────
+
 @app.get("/scoring-criteria")
 def get_scoring_criteria():
-    """Ritorna tutti i criteri di valutazione raggruppati per categoria."""
-    res = supabase.table("scoring_criteria")        .select("*")        .eq("active", True)        .order("category_key")        .order("sort_order")        .execute()
+    res = supabase.table("scoring_criteria").select("*").eq("active", True) \
+        .order("category_key").order("sort_order").execute()
     data = res.data or []
+    # Ritorna sia formato grouped che lista flat con .criteria per compatibilità
     grouped = {}
     for c in data:
         key = c["category_key"]
         if key not in grouped:
             grouped[key] = []
         grouped[key].append(c)
-    return grouped
+    return {"criteria": data, "grouped": grouped}
 
 
 @app.get("/brands/{brand_id}/scores")
 def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
-    """
-    Ritorna i punteggi voce per voce di un brand.
-    Voci non ancora valutate tornano con score=3 (neutro).
-    """
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-
-    criteria_res = supabase.table("scoring_criteria")        .select("*")        .eq("active", True)        .order("category_key")        .order("sort_order")        .execute()
+    criteria_res = supabase.table("scoring_criteria").select("*").eq("active", True) \
+        .order("category_key").order("sort_order").execute()
     all_criteria = criteria_res.data or []
-
-    scores_res = supabase.table("brand_scores")        .select("*")        .eq("brand_id", brand_id)        .eq("status", "published")        .execute()
+    scores_res = supabase.table("brand_scores").select("*").eq("brand_id", brand_id).eq("status", "published").execute()
     scores_by_criterion = {row["criterion_id"]: row for row in (scores_res.data or [])}
-
     result = {}
     for c in all_criteria:
         key = c["category_key"]
@@ -1174,6 +979,141 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
             "last_updated": s["last_updated"] if s else None,
         })
     return result
+
+
+# ─── SCORING V2 ──────────────────────────────────────────────────────────────
+
+class CriterionSourceScoreIn(BaseModel):
+    brand_id: int
+    criterion_id: int
+    source_id: Optional[int] = None
+    tier: int
+    judgment: str
+    notes: Optional[str] = None
+
+
+@app.post("/scoring/criterion-score")
+def add_criterion_source_score(data: CriterionSourceScoreIn):
+    if data.tier not in TIER_VALUES:
+        raise HTTPException(status_code=400, detail="tier must be 1, 2 or 3")
+    if data.judgment not in TIER_VALUES[1]:
+        raise HTTPException(status_code=400, detail=f"judgment must be one of {list(TIER_VALUES[1].keys())}")
+
+    value = TIER_VALUES[data.tier][data.judgment]
+    label_en = SCORE_LABELS[data.judgment]["en"]
+    label_it = SCORE_LABELS[data.judgment]["it"]
+
+    try:
+        supabase.table("criterion_source_scores").upsert({
+            "brand_id": data.brand_id,
+            "criterion_id": data.criterion_id,
+            "source_id": data.source_id,
+            "tier": data.tier,
+            "value": value,
+            "label_en": label_en,
+            "label_it": label_it,
+            "notes": data.notes,
+            "status": "published",
+            "updated_at": "now()",
+        }, on_conflict="brand_id,criterion_id,source_id").execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    result = compute_brand_score_v2(data.brand_id)
+    return {"ok": True, "value": value, **result}
+
+
+@app.delete("/scoring/criterion-score/{brand_id}/{criterion_id}/{source_id}")
+def delete_criterion_source_score(brand_id: int, criterion_id: int, source_id: int):
+    """
+    Rimuove una valutazione fonte/criterio e ricalcola il punteggio del brand.
+    """
+    try:
+        supabase.table("criterion_source_scores") \
+            .delete() \
+            .eq("brand_id", brand_id) \
+            .eq("criterion_id", criterion_id) \
+            .eq("source_id", source_id) \
+            .execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    result = compute_brand_score_v2(brand_id)
+    return {"ok": True, **result}
+
+
+@app.get("/scoring/criterion-scores/{brand_id}")
+def get_criterion_scores(brand_id: int):
+    css_res = supabase.table("criterion_source_scores") \
+        .select("*, scoring_criteria(code, label_en, label_it, category_key), sources(url, title, publisher)") \
+        .eq("brand_id", brand_id) \
+        .eq("status", "published") \
+        .execute()
+    rows = css_res.data or []
+
+    by_criterion = {}
+    for r in rows:
+        cid = r["criterion_id"]
+        if cid not in by_criterion:
+            by_criterion[cid] = {"criterion": r.get("scoring_criteria"), "sources": []}
+        by_criterion[cid]["sources"].append({
+            "source_id": r.get("source_id"),
+            "source": r.get("sources"),
+            "tier": r["tier"],
+            "value": r["value"],
+            "label_en": r["label_en"],
+            "label_it": r["label_it"],
+        })
+
+    result = []
+    for cid, data in by_criterion.items():
+        css_rows = [{"tier": s["tier"], "value": s["value"], "status": "published"}
+                    for s in data["sources"]]
+        computed = compute_criterion_score(css_rows)
+        result.append({
+            "criterion_id": cid,
+            "criterion": data["criterion"],
+            "computed_score": computed["score"],
+            "criteria_met": computed["criteria_met"],
+            "tier_used": computed["tier_used"],
+            "sources": data["sources"],
+        })
+
+    brand_res = supabase.table("brands").select("total_score_v2, criteria_published") \
+        .eq("id", brand_id).single().execute()
+    brand = brand_res.data or {}
+
+    return {
+        "brand_id": brand_id,
+        "total_score_v2": brand.get("total_score_v2"),
+        "criteria_published": brand.get("criteria_published", 0),
+        "criteria": result,
+    }
+
+
+@app.post("/scoring/recalculate/{brand_id}")
+def recalculate_brand_score(brand_id: int):
+    result = compute_brand_score_v2(brand_id)
+    return {"ok": True, "brand_id": brand_id, **result}
+
+
+@app.post("/scoring/recalculate-all")
+def recalculate_all_scores():
+    brands_res = supabase.table("brands").select("id").execute()
+    brands = brands_res.data or []
+    results = []
+    for b in brands:
+        try:
+            r = compute_brand_score_v2(b["id"])
+            results.append({"brand_id": b["id"], **r})
+        except Exception as e:
+            results.append({"brand_id": b["id"], "error": str(e)})
+    return {"ok": True, "processed": len(results), "results": results}
+
+
+@app.get("/scoring/verdict")
+def get_score_verdict(score: float, lang: str = "en"):
+    return get_verdict(score, lang)
 
 
 # ─── CONTRIBUTION ENDPOINTS ───────────────────────────────────────────────────
@@ -1201,39 +1141,27 @@ class ErrorReportIn(BaseModel):
     source_url: Optional[str] = None
     submitter: Optional[str] = None
 
-# ─── CONTRIBUTION NOTIFICATIONS ──────────────────────────────────────────────
 
 async def notify_contribution(type: str, data: dict):
-    """Manda email a NOTIFY_EMAIL quando arriva una contribuzione pubblica."""
     resend_key = os.getenv("RESEND_KEY")
     notify_email = os.getenv("NOTIFY_EMAIL")
     if not resend_key or not notify_email:
         return
-
     icons = {"brand": "🏷️", "source": "🔗", "error": "🚨"}
-    titles = {
-        "brand":  "New brand proposal",
-        "source": "New source proposal",
-        "error":  "New error report",
-    }
+    titles = {"brand": "New brand proposal", "source": "New source proposal", "error": "New error report"}
     icon = icons.get(type, "📬")
     title = titles.get(type, "New contribution")
-
-    # Costruisci righe dettaglio
     rows = ""
     for key, val in data.items():
         if val:
             rows += f"<tr><td style='padding:6px 10px;color:#666;font-size:12px;white-space:nowrap'>{key}</td><td style='padding:6px 10px;font-size:12px'>{val}</td></tr>"
-
     html = f"""<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a2e">
   <div style="background:#0f1a14;padding:18px 24px;border-radius:12px 12px 0 0;border-bottom:2px solid #63CAB7">
     <h2 style="color:#63CAB7;margin:0;font-size:16px;font-weight:600">{icon} EthicPrint — {title}</h2>
     <p style="color:rgba(255,255,255,0.4);margin:4px 0 0;font-size:12px">{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')} UTC</p>
   </div>
   <div style="background:#fff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;padding:20px">
-    <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">
-      {rows}
-    </table>
+    <table style="width:100%;border-collapse:collapse;background:#f9f9f9;border-radius:8px;overflow:hidden">{rows}</table>
     <div style="margin-top:20px;text-align:center">
       <a href="https://ethicprint.org/admin.html" style="display:inline-block;background:#0f1a14;color:#63CAB7;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;border:1px solid #63CAB7">
         Review in admin →
@@ -1241,46 +1169,34 @@ async def notify_contribution(type: str, data: dict):
     </div>
   </div>
 </div>"""
-
     try:
         import httpx as _httpx
         async with _httpx.AsyncClient() as c:
             await c.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                json={
-                    "from": "EthicPrint <checker@ethicprint.org>",
-                    "to": [notify_email],
-                    "subject": f"EthicPrint: {title}",
-                    "html": html,
-                },
+                json={"from": "EthicPrint <checker@ethicprint.org>", "to": [notify_email],
+                      "subject": f"EthicPrint: {title}", "html": html},
                 timeout=10,
             )
     except Exception as e:
         print(f"notify_contribution failed: {e}")
 
 
-
 @app.post("/contribute/brand")
 async def propose_brand(data: BrandProposalIn, background_tasks: BackgroundTasks):
-    """Proposta pubblica di un nuovo brand da aggiungere."""
     if not data.name or len(data.name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Brand name too short")
     try:
         res = supabase.table("brand_proposals").insert({
-            "name": data.name.strip(),
-            "sector_key": data.sector_key,
-            "website": data.website,
-            "reason": data.reason,
-            "submitter": data.submitter,
-            "status": "pending",
+            "name": data.name.strip(), "sector_key": data.sector_key,
+            "website": data.website, "reason": data.reason,
+            "submitter": data.submitter, "status": "pending",
         }).execute()
         new_id = res.data[0]["id"] if res.data else None
         background_tasks.add_task(notify_contribution, "brand", {
-            "Brand": data.name.strip(),
-            "Sector": data.sector_key or "—",
-            "Website": data.website or "—",
-            "Reason": data.reason or "—",
+            "Brand": data.name.strip(), "Sector": data.sector_key or "—",
+            "Website": data.website or "—", "Reason": data.reason or "—",
             "Submitted by": data.submitter or "anonymous",
         })
         return {"ok": True, "id": new_id}
@@ -1290,7 +1206,6 @@ async def propose_brand(data: BrandProposalIn, background_tasks: BackgroundTasks
 
 @app.post("/contribute/source")
 async def propose_source_public(data: SourceProposalIn, background_tasks: BackgroundTasks):
-    """Proposta pubblica di una nuova fonte per un brand esistente."""
     if not data.url or not data.url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid URL")
     brand_res = supabase.table("brands").select("id, name").eq("id", data.brand_id).limit(1).execute()
@@ -1303,23 +1218,16 @@ async def propose_source_public(data: SourceProposalIn, background_tasks: Backgr
         raise HTTPException(status_code=409, detail="Source already exists or proposed")
     try:
         res = supabase.table("source_proposals").insert({
-            "brand_id": data.brand_id,
-            "category_key": data.category_key,
-            "url": data.url,
-            "title": data.title,
-            "publisher": data.publisher or "",
-            "summary": data.summary or "",
-            "status": "pending",
-            "job_type": "new",
+            "brand_id": data.brand_id, "category_key": data.category_key,
+            "url": data.url, "title": data.title,
+            "publisher": data.publisher or "", "summary": data.summary or "",
+            "status": "pending", "job_type": "new",
         }).execute()
         new_id = res.data[0]["id"] if res.data else None
         background_tasks.add_task(notify_contribution, "source", {
-            "Brand": brand_name,
-            "Category": data.category_key or "—",
-            "URL": data.url,
-            "Title": data.title or "—",
-            "Publisher": data.publisher or "—",
-            "Submitted by": data.submitter or "anonymous",
+            "Brand": brand_name, "Category": data.category_key or "—",
+            "URL": data.url, "Title": data.title or "—",
+            "Publisher": data.publisher or "—", "Submitted by": data.submitter or "anonymous",
         })
         return {"ok": True, "id": new_id}
     except Exception as e:
@@ -1328,7 +1236,6 @@ async def propose_source_public(data: SourceProposalIn, background_tasks: Backgr
 
 @app.post("/contribute/error")
 async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
-    """Segnalazione pubblica di un errore su un brand esistente."""
     if not data.description or len(data.description.strip()) < 10:
         raise HTTPException(status_code=400, detail="Description too short")
     brand_res = supabase.table("brands").select("id, name").eq("id", data.brand_id).limit(1).execute()
@@ -1337,19 +1244,14 @@ async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
     brand_name = brand_res.data[0].get("name", str(data.brand_id))
     try:
         res = supabase.table("error_reports").insert({
-            "brand_id": data.brand_id,
-            "category_key": data.category_key,
-            "description": data.description.strip(),
-            "source_url": data.source_url,
-            "submitter": data.submitter,
-            "status": "pending",
+            "brand_id": data.brand_id, "category_key": data.category_key,
+            "description": data.description.strip(), "source_url": data.source_url,
+            "submitter": data.submitter, "status": "pending",
         }).execute()
         new_id = res.data[0]["id"] if res.data else None
         background_tasks.add_task(notify_contribution, "error", {
-            "Brand": brand_name,
-            "Category": data.category_key or "—",
-            "Description": data.description.strip(),
-            "Source URL": data.source_url or "—",
+            "Brand": brand_name, "Category": data.category_key or "—",
+            "Description": data.description.strip(), "Source URL": data.source_url or "—",
             "Submitted by": data.submitter or "anonymous",
         })
         return {"ok": True, "id": new_id}
@@ -1359,12 +1261,8 @@ async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
 
 @app.get("/contribute/brands-list")
 def get_brands_for_contribute(lang: str = "en"):
-    """Lista brand per il form contribuzione (id + name + sector)."""
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
-    res = supabase.table("brands")\
-        .select("id, name, logo, sectors(key, label, label_en)")\
-        .order("name")\
-        .execute()
+    res = supabase.table("brands").select("id, name, logo, sectors(key, label, label_en)").order("name").execute()
     brands = res.data or []
     return [{"id": b["id"], "name": b["name"], "logo": b["logo"],
              "sector": (b.get("sectors") or {}).get("label_en" if lang == "en" else "label", "")}
@@ -1373,11 +1271,9 @@ def get_brands_for_contribute(lang: str = "en"):
 
 @app.get("/contribute/pending")
 def get_contributions_pending():
-    """Ritorna tutte le contribuzioni pendenti per l'admin."""
-    brand_props = supabase.table("brand_proposals")\
-        .select("*").eq("status", "pending").order("created_at", desc=True).execute().data or []
-    error_reps = supabase.table("error_reports")\
-        .select("*, brands(name, logo)").eq("status", "pending")\
+    brand_props = supabase.table("brand_proposals").select("*").eq("status", "pending") \
+        .order("created_at", desc=True).execute().data or []
+    error_reps = supabase.table("error_reports").select("*, brands(name, logo)").eq("status", "pending") \
         .order("created_at", desc=True).execute().data or []
     return {
         "brand_proposals": brand_props,
@@ -1388,7 +1284,6 @@ def get_contributions_pending():
 
 @app.post("/contribute/brand-proposal/{proposal_id}/resolve")
 def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
-    """Approva o rifiuta una proposta di brand."""
     if status not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be approved or rejected")
     supabase.table("brand_proposals").update({"status": status}).eq("id", proposal_id).execute()
@@ -1397,36 +1292,23 @@ def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
 
 @app.post("/contribute/error-report/{report_id}/resolve")
 def resolve_error_report(report_id: int, status: str = "resolved"):
-    """Segna una segnalazione errore come risolta o ignorata."""
     if status not in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be resolved or rejected")
     supabase.table("error_reports").update({"status": status}).eq("id", report_id).execute()
     return {"ok": True}
 
 
-# ─── MANUAL REPLACEMENT SEARCH ───────────────────────────────────────────────
+# ─── REPLACEMENT SEARCH ───────────────────────────────────────────────────────
 
 @app.post("/sources/{source_id}/find-replacement")
 async def find_replacement(source_id: int):
-    """
-    Cerca manualmente un sostituto per una fonte rotta.
-    Usa Brave Search + Claude Haiku per valutare i candidati.
-    Ritorna fino a 3 candidati rilevanti senza salvarli.
-    """
     import httpx as _httpx
-
-    source_res = supabase.table("sources")\
-        .select("*, brands(name)")\
-        .eq("id", source_id)\
-        .single()\
-        .execute()
+    source_res = supabase.table("sources").select("*, brands(name)").eq("id", source_id).single().execute()
     if not source_res.data:
         raise HTTPException(status_code=404, detail="Source not found")
-
     source = source_res.data
     brand_name = (source.get("brands") or {}).get("name", "")
     category_key = source.get("category_key", "")
-
     CAT_LABELS = {
         "armi": "arms weapons military contracts defense",
         "ambiente": "environment CO2 emissions climate sustainability",
@@ -1436,11 +1318,8 @@ async def find_replacement(source_id: int):
     cat_desc = CAT_LABELS.get(category_key, category_key)
     year = __import__("datetime").datetime.now().year
     query = f"{brand_name} {cat_desc} {year-1}..{year}"
-
     brave_key = os.getenv("BRAVE_API_KEY")
-    anthropic_key = ANTHROPIC_KEY
     candidates = []
-
     if brave_key:
         try:
             async with _httpx.AsyncClient() as c:
@@ -1451,20 +1330,16 @@ async def find_replacement(source_id: int):
                     timeout=10,
                 )
                 results = r.json().get("web", {}).get("results", [])
-                candidates = [{"url": x.get("url"), "title": x.get("title"), "description": x.get("description", "")} for x in results if x.get("url")]
+                candidates = [{"url": x.get("url"), "title": x.get("title"), "description": x.get("description", "")}
+                               for x in results if x.get("url")]
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Brave search failed: {e}")
-
     if not candidates:
         return {"candidates": [], "query": query}
-
-    # Filtra URL già presenti nel DB
     existing_urls = {s["url"] for s in (supabase.table("sources").select("url").execute().data or [])}
     candidates = [c for c in candidates if c["url"] not in existing_urls]
-
-    # Valuta con Claude
     approved = []
-    if anthropic_key:
+    if ANTHROPIC_KEY:
         async with _httpx.AsyncClient() as c:
             for candidate in candidates[:6]:
                 prompt = f"""You are evaluating a replacement source for EthicPrint.
@@ -1483,53 +1358,36 @@ Is this a relevant, credible replacement? Reply ONLY with JSON:
                 try:
                     r = await c.post(
                         "https://api.anthropic.com/v1/messages",
-                        headers={"Content-Type": "application/json", "x-api-key": anthropic_key, "anthropic-version": "2023-06-01"},
-                        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "messages": [{"role": "user", "content": prompt}]},
+                        headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
+                        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200,
+                              "messages": [{"role": "user", "content": prompt}]},
                         timeout=30,
                     )
                     text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
                     ev = __import__("json").loads(text)
                     if ev.get("relevant"):
-                        approved.append({
-                            **candidate,
-                            "publisher": ev.get("publisher", ""),
-                            "summary": ev.get("summary", ""),
-                            "tier": ev.get("tier", 3),
-                        })
+                        approved.append({**candidate, "publisher": ev.get("publisher", ""),
+                                         "summary": ev.get("summary", ""), "tier": ev.get("tier", 3)})
                     if len(approved) >= 3:
                         break
                 except Exception:
                     continue
-
-    return {
-        "source_id": source_id,
-        "brand_name": brand_name,
-        "category_key": category_key,
-        "query": query,
-        "candidates": approved,
-    }
+    return {"source_id": source_id, "brand_name": brand_name, "category_key": category_key,
+            "query": query, "candidates": approved}
 
 
 @app.post("/sources/{source_id}/propose-replacement")
 def propose_replacement(source_id: int, data: dict):
-    """Salva un candidato sostituto come source_proposal in stato pending."""
-    source_res = supabase.table("sources")\
-        .select("brand_id, category_key")\
-        .eq("id", source_id).single().execute()
+    source_res = supabase.table("sources").select("brand_id, category_key").eq("id", source_id).single().execute()
     if not source_res.data:
         raise HTTPException(status_code=404, detail="Source not found")
     s = source_res.data
     try:
         res = supabase.table("source_proposals").insert({
-            "brand_id": s["brand_id"],
-            "category_key": s["category_key"],
-            "url": data.get("url"),
-            "title": data.get("title"),
-            "publisher": data.get("publisher", ""),
-            "summary": data.get("summary", ""),
-            "status": "pending",
-            "job_type": "replacement",
-            "replaces_id": source_id,
+            "brand_id": s["brand_id"], "category_key": s["category_key"],
+            "url": data.get("url"), "title": data.get("title"),
+            "publisher": data.get("publisher", ""), "summary": data.get("summary", ""),
+            "status": "pending", "job_type": "replacement", "replaces_id": source_id,
         }).execute()
         return {"ok": True, "id": res.data[0]["id"] if res.data else None}
     except Exception as e:
@@ -1538,140 +1396,5 @@ def propose_replacement(source_id: int, data: dict):
 
 @app.post("/sources/{source_id}/mark-resolved")
 def mark_source_resolved(source_id: int):
-    """Segna una fonte come non più rotta (es. link ripristinato)."""
-    supabase.table("sources").update({
-        "broken": False,
-        "content_missing": False,
-    }).eq("id", source_id).execute()
+    supabase.table("sources").update({"broken": False, "content_missing": False}).eq("id", source_id).execute()
     return {"ok": True}
-
-
-# ─── SCORING V2 ENDPOINTS ────────────────────────────────────────────────────
-
-class CriterionSourceScoreIn(BaseModel):
-    brand_id: int
-    criterion_id: int
-    source_id: Optional[int] = None
-    tier: int  # 1/2/3
-    judgment: str  # positive / prev_positive / prev_negative / negative
-    notes: Optional[str] = None
-
-@app.post("/scoring/criterion-score")
-def add_criterion_source_score(data: CriterionSourceScoreIn):
-    """
-    Aggiunge una valutazione fonte per un criterio.
-    Calcola il valore numerico da tier + judgment,
-    poi ricalcola il punteggio del brand.
-    """
-    if data.tier not in TIER_VALUES:
-        raise HTTPException(status_code=400, detail="tier must be 1, 2 or 3")
-    if data.judgment not in TIER_VALUES[1]:
-        raise HTTPException(status_code=400, detail=f"judgment must be one of {list(TIER_VALUES[1].keys())}")
-
-    value = TIER_VALUES[data.tier][data.judgment]
-    label_en = SCORE_LABELS[data.judgment]["en"]
-    label_it = SCORE_LABELS[data.judgment]["it"]
-
-    try:
-        supabase.table("criterion_source_scores").upsert({
-            "brand_id": data.brand_id,
-            "criterion_id": data.criterion_id,
-            "source_id": data.source_id,
-            "tier": data.tier,
-            "value": value,
-            "label_en": label_en,
-            "label_it": label_it,
-            "notes": data.notes,
-            "status": "published",
-            "updated_at": "now()",
-        }, on_conflict="brand_id,criterion_id,source_id").execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    # Ricalcola punteggio brand
-    result = compute_brand_score_v2(data.brand_id)
-    return {"ok": True, "value": value, **result}
-
-
-@app.get("/scoring/criterion-scores/{brand_id}")
-def get_criterion_scores(brand_id: int):
-    """
-    Ritorna tutti i criterion_source_scores di un brand,
-    con il punteggio calcolato per criterio.
-    """
-    css_res = supabase.table("criterion_source_scores")\
-        .select("*, scoring_criteria(code, label_en, label_it, category_key), sources(url, title, publisher)")\
-        .eq("brand_id", brand_id)\
-        .eq("status", "published")\
-        .execute()
-    rows = css_res.data or []
-
-    # Raggruppa per criterio
-    by_criterion = {}
-    for r in rows:
-        cid = r["criterion_id"]
-        if cid not in by_criterion:
-            by_criterion[cid] = {"criterion": r.get("scoring_criteria"), "sources": []}
-        by_criterion[cid]["sources"].append({
-            "source": r.get("sources"),
-            "tier": r["tier"],
-            "value": r["value"],
-            "label_en": r["label_en"],
-            "label_it": r["label_it"],
-        })
-
-    # Calcola score per criterio
-    result = []
-    for cid, data in by_criterion.items():
-        css_rows = [{"tier": s["tier"], "value": s["value"], "status": "published"}
-                    for s in data["sources"]]
-        computed = compute_criterion_score(css_rows)
-        result.append({
-            "criterion_id": cid,
-            "criterion": data["criterion"],
-            "computed_score": computed["score"],
-            "criteria_met": computed["criteria_met"],
-            "tier_used": computed["tier_used"],
-            "sources": data["sources"],
-        })
-
-    # Brand total
-    brand_res = supabase.table("brands")\
-        .select("total_score_v2, criteria_published")\
-        .eq("id", brand_id).single().execute()
-    brand = brand_res.data or {}
-
-    return {
-        "brand_id": brand_id,
-        "total_score_v2": brand.get("total_score_v2"),
-        "criteria_published": brand.get("criteria_published", 0),
-        "criteria": result,
-    }
-
-
-@app.post("/scoring/recalculate/{brand_id}")
-def recalculate_brand_score(brand_id: int):
-    """Ricalcola manualmente il punteggio V2 di un brand."""
-    result = compute_brand_score_v2(brand_id)
-    return {"ok": True, "brand_id": brand_id, **result}
-
-
-@app.post("/scoring/recalculate-all")
-def recalculate_all_scores():
-    """Ricalcola i punteggi V2 di tutti i brand (operazione pesante)."""
-    brands_res = supabase.table("brands").select("id").execute()
-    brands = brands_res.data or []
-    results = []
-    for b in brands:
-        try:
-            r = compute_brand_score_v2(b["id"])
-            results.append({"brand_id": b["id"], **r})
-        except Exception as e:
-            results.append({"brand_id": b["id"], "error": str(e)})
-    return {"ok": True, "processed": len(results), "results": results}
-
-
-@app.get("/scoring/verdict")
-def get_score_verdict(score: float, lang: str = "en"):
-    """Ritorna emoji e label per un punteggio V2."""
-    return get_verdict(score, lang)
