@@ -951,15 +951,33 @@ Reply ONLY with JSON:
         print(f"Score analysis failed: {e}")
 
 
+class ApproveProposalBody(BaseModel):
+    confirmed_judgment: Optional[str] = None  # Positive / Predominantly positive / Predominantly negative / Negative
+
+JUDGMENT_VALUES = {
+    "Positive":                20,
+    "Predominantly positive":  10,
+    "Predominantly negative": -10,
+    "Negative":               -20,
+}
+JUDGMENT_LABELS_IT = {
+    "Positive":                "Positivo",
+    "Predominantly positive":  "Prevalentemente positivo",
+    "Predominantly negative":  "Prevalentemente negativo",
+    "Negative":                "Negativo",
+}
+
 @app.post("/source-proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks):
-    """Approva una proposta: la inserisce in sources, avvia analisi score."""
+async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks, body: Optional[ApproveProposalBody] = None):
+    """Approva una proposta: la inserisce in sources, pre-popola il giudizio AI se disponibile."""
     prop_res = supabase.table("source_proposals").select("*").eq("id", proposal_id).single().execute()
     if not prop_res.data:
         raise HTTPException(status_code=404, detail="Proposal not found")
     p = prop_res.data
 
-    # Inserisci in sources con tier auto-rilevato dal publisher
+    tier = detect_tier(p.get("publisher", ""))
+
+    # Inserisci in sources
     new_source = supabase.table("sources").insert({
         "brand_id": p["brand_id"],
         "category_key": p["category_key"],
@@ -968,9 +986,8 @@ async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks):
         "publisher": p["publisher"],
         "broken": False,
         "content_missing": False,
-        "tier": detect_tier(p.get("publisher", "")),
+        "tier": tier,
     }).execute()
-
     source_id = new_source.data[0]["id"] if new_source.data else None
 
     # Marca proposta come approvata
@@ -980,19 +997,51 @@ async def approve_proposal(proposal_id: int, background_tasks: BackgroundTasks):
     if p.get("replaces_id"):
         supabase.table("sources").delete().eq("id", p["replaces_id"]).execute()
 
-    # Analisi score in background — non blocca la risposta
-    if source_id:
-        background_tasks.add_task(
-            analyze_source_for_score,
-            source_id=source_id,
-            brand_id=p["brand_id"],
-            category_key=p["category_key"],
-            url=p["url"],
-            title=p.get("title", ""),
-            summary=p.get("summary", ""),
-        )
+    # Pre-popola criterion_source_scores se c'è un giudizio AI confermato
+    judgment = (body.confirmed_judgment if body and body.confirmed_judgment else None) or p.get("ai_judgment")
+    if source_id and judgment and judgment in JUDGMENT_VALUES:
+        # Determina il valore in base al tier effettivo
+        tier_multipliers = {1: 1.0, 2: 0.5, 3: 0.1}
+        base_val = JUDGMENT_VALUES[judgment]
+        tier_mult = tier_multipliers.get(tier, 0.5)
+        # Valori per tier: T1 ±20/±10, T2 ±10/±5, T3 ±2/±1
+        tier_values = {
+            1: {20: 20, 10: 10, -10: -10, -20: -20},
+            2: {20: 10, 10: 5,  -10: -5,  -20: -10},
+            3: {20: 2,  10: 1,  -10: -1,  -20: -2},
+        }
+        value = tier_values.get(tier, tier_values[2]).get(base_val, int(base_val * tier_mult))
 
-    return {"message": "Proposal approved. Score analysis started in background."}
+        # Trova il criterion_id corrispondente alla categoria
+        # Usa ai_criterion se specificato, altrimenti il primo criterio della categoria
+        criterion_code = p.get("ai_criterion", "")
+        crit_res = None
+        if criterion_code:
+            crit_res = supabase.table("scoring_criteria").select("id").eq("code", criterion_code).limit(1).execute()
+        if not crit_res or not crit_res.data:
+            crit_res = supabase.table("scoring_criteria").select("id").eq("category_key", p["category_key"]).eq("active", True).order("sort_order").limit(1).execute()
+
+        if crit_res and crit_res.data:
+            criterion_id = crit_res.data[0]["id"]
+            label_it = JUDGMENT_LABELS_IT.get(judgment, judgment)
+            try:
+                supabase.table("criterion_source_scores").upsert({
+                    "brand_id": p["brand_id"],
+                    "criterion_id": criterion_id,
+                    "source_id": source_id,
+                    "tier": tier,
+                    "value": value,
+                    "label_en": judgment,
+                    "label_it": label_it,
+                    "notes": p.get("ai_rationale", ""),
+                    "status": "draft",  # draft: visibile in admin ma non ancora published
+                }, on_conflict="brand_id,criterion_id,source_id").execute()
+                # Ricalcola score brand in background
+                background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
+            except Exception as e:
+                print(f"criterion_source_scores upsert failed: {e}")
+
+    return {"message": "Proposal approved.", "judgment_saved": bool(judgment and judgment in JUDGMENT_VALUES)}
 
 
 @app.post("/source-proposals/{proposal_id}/reject")
