@@ -577,7 +577,7 @@ def get_categories():
 def get_brand_sources(brand_id: int):
     """
     Ritorna tutte le fonti del brand come array flat.
-    Include le esclusioni per criterio.
+    Include esclusioni per criterio e proposal_id per ogni fonte.
     """
     brand_res = supabase.table("brands").select("id").eq("id", brand_id).single().execute()
     if not brand_res.data:
@@ -591,20 +591,25 @@ def get_brand_sources(brand_id: int):
         .order("category_key") \
         .execute()
 
-    # Carica le esclusioni per questo brand
+    # Carica esclusioni per questo brand
     excl_res = supabase.table("source_criterion_exclusions") \
         .select("source_id, criterion_id") \
         .eq("brand_id", brand_id) \
         .execute()
-    exclusions = excl_res.data or []
-
-    # Mappa source_id → [criterion_ids esclusi]
     excl_map: dict = {}
-    for e in exclusions:
+    for e in (excl_res.data or []):
         sid = e["source_id"]
         if sid not in excl_map:
             excl_map[sid] = []
         excl_map[sid].append(e["criterion_id"])
+
+    # Carica proposal_id per ogni fonte (join via URL + brand_id)
+    props_res = supabase.table("source_proposals") \
+        .select("id, url") \
+        .eq("brand_id", brand_id) \
+        .eq("status", "approved") \
+        .execute()
+    proposal_by_url = {p["url"]: p["id"] for p in (props_res.data or [])}
 
     sources = []
     for s in (res.data or []):
@@ -617,6 +622,7 @@ def get_brand_sources(brand_id: int):
             "category_key": s["category_key"],
             "tier": s.get("tier", 3),
             "excluded_from_criteria": excl_map.get(s["id"], []),
+            "proposal_id": proposal_by_url.get(s["url"]),
         })
 
     return {"sources": sources}
@@ -1298,7 +1304,6 @@ def resolve_error_report(report_id: int, status: str = "resolved"):
     return {"ok": True}
 
 
-# ─── REPLACEMENT SEARCH ───────────────────────────────────────────────────────
 # ─── REPLACEMENT SEARCH ───────────────────────────────────────────────────────
 
 @app.post("/sources/{source_id}/find-replacement")
