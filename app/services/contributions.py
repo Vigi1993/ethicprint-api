@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 
 from app.integrations.supabase_client import supabase
-from legacy_main import notify_contribution
+from app.services.notifications import notify_contribution
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
 
 
