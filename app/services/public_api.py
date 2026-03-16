@@ -166,9 +166,36 @@ def fetch_categories():
     return res.data or []
 
 
-def get_public_sources_summary():
-    """
-    TODO:
-    copia qui il corpo della vecchia route GET /sources/public
-    """
-    raise NotImplementedError("Move /sources/public logic from legacy_main.py into get_public_sources_summary()")
+from app.services.scoring import detect_tier
+
+
+def fetch_public_sources():
+    res = (
+        supabase.table("sources")
+        .select("id, url, title, publisher, published_at, category_key, tier, brand_id, brands(name)")
+        .neq("broken", True)
+        .neq("content_missing", True)
+        .order("tier")
+        .execute()
+    )
+
+    sources = res.data or []
+
+    for s in sources:
+        if not s.get("tier"):
+            s["tier"] = detect_tier(s.get("publisher", ""))
+
+    total = len(sources)
+
+    by_tier = {1: [], 2: [], 3: []}
+
+    for s in sources:
+        t = s.get("tier", 3)
+        by_tier[t if t in [1, 2, 3] else 3].append(s)
+
+    return {
+        "total": total,
+        "tier1": by_tier[1],
+        "tier2": by_tier[2],
+        "tier3": by_tier[3],
+    }
