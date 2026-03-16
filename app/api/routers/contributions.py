@@ -7,6 +7,7 @@ from app.services.contributions import (
     fetch_brands_for_contribute,
     fetch_contributions_pending,
     resolve_brand_proposal,
+    resolve_error_report,
 )
 from legacy_main import BrandProposalIn, SourceProposalIn, ErrorReportIn
 
@@ -40,3 +41,7 @@ def resolve_brand_proposal_endpoint(proposal_id: int, status: str = "approved"):
 @router.get("/contribute/pending")
 def get_contributions_pending():
     return fetch_contributions_pending()
+
+@router.post("/contribute/error-report/{report_id}/resolve")
+def resolve_error_report_endpoint(report_id: int, status: str = "resolved"):
+    return resolve_error_report(report_id=report_id, status=status)
