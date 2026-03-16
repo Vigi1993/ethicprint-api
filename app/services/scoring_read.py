@@ -3,6 +3,7 @@ from typing import Optional
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG, SCORE_LABELS
 from app.integrations.supabase_client import supabase
 from app.services.scoring import compute_criterion_score
+from app.services.scoring import get_verdict
 
 
 def fetch_scoring_criteria():
@@ -136,3 +137,7 @@ def fetch_criterion_scores(brand_id: int):
         "criteria_published": brand.get("criteria_published", 0),
         "criteria": result,
     }
+
+
+def fetch_score_verdict(score: float, lang: str = "en"):
+    return get_verdict(score, lang)
