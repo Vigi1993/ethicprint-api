@@ -142,3 +142,40 @@ Is this a relevant, credible replacement? Reply ONLY with JSON:
         "query": query,
         "candidates": approved,
     }
+
+def create_replacement_proposal(source_id: int, data: dict):
+    source_res = (
+        supabase.table("sources")
+        .select("brand_id, category_key")
+        .eq("id", source_id)
+        .single()
+        .execute()
+    )
+    if not source_res.data:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    s = source_res.data
+
+    try:
+        res = (
+            supabase.table("source_proposals")
+            .insert(
+                {
+                    "brand_id": s["brand_id"],
+                    "category_key": s["category_key"],
+                    "url": data.get("url"),
+                    "title": data.get("title"),
+                    "publisher": data.get("publisher", ""),
+                    "summary": data.get("summary", ""),
+                    "status": "pending",
+                    "job_type": "replacement",
+                    "replaces_id": source_id,
+                }
+            )
+            .execute()
+        )
+
+        return {"ok": True, "id": res.data[0]["id"] if res.data else None}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
