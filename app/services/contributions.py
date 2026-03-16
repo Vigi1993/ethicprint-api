@@ -2,6 +2,7 @@ from fastapi import HTTPException
 
 from app.integrations.supabase_client import supabase
 from legacy_main import notify_contribution
+from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
 
 
 async def create_brand_proposal(data, background_tasks):
@@ -158,3 +159,28 @@ async def create_error_report(data, background_tasks):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def fetch_brands_for_contribute(lang: str = "en"):
+    lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
+
+    res = (
+        supabase.table("brands")
+        .select("id, name, logo, sectors(key, label, label_en)")
+        .order("name")
+        .execute()
+    )
+
+    brands = res.data or []
+
+    return [
+        {
+            "id": b["id"],
+            "name": b["name"],
+            "logo": b["logo"],
+            "sector": (b.get("sectors") or {}).get(
+                "label_en" if lang == "en" else "label",
+                "",
+            ),
+        }
+        for b in brands
+    ]
