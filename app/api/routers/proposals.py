@@ -8,6 +8,7 @@ from app.services.proposals import (
     approve_source_proposal,
     reject_source_proposal,
     fetch_score_proposals,
+    approve_score_proposal,
 )
 from legacy_main import ApproveProposalBody, JUDGMENT_VALUES, JUDGMENT_LABELS_IT
 
@@ -47,3 +48,8 @@ def reject_proposal(proposal_id: int):
 @router.get("/score-proposals")
 def get_score_proposals(status: str = "pending"):
     return fetch_score_proposals(status=status)
+
+
+@router.post("/score-proposals/{proposal_id}/approve")
+def approve_score(proposal_id: int):
+    return approve_score_proposal(proposal_id=proposal_id)
