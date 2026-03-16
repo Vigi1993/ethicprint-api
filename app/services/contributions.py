@@ -214,3 +214,13 @@ def fetch_contributions_pending():
             "error_reports": len(error_reps),
         },
     }
+
+def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
+    if status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be approved or rejected")
+
+    supabase.table("brand_proposals").update(
+        {"status": status}
+    ).eq("id", proposal_id).execute()
+
+    return {"ok": True}
