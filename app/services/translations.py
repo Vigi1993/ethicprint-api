@@ -1,3 +1,6 @@
+from app.integrations.supabase_client import supabase
+from app.core.config import settings
+
 def get_translation(brand_id: int, lang: str) -> dict | None:
     if lang == DEFAULT_LANG:
         return None
