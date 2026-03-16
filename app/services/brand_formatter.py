@@ -1,3 +1,5 @@
+from app.core.constants import DEFAULT_LANG
+
 def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
     if translation:
         brand = apply_translation(dict(brand), translation)
