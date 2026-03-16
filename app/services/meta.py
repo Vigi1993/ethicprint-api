@@ -10,8 +10,8 @@ def fetch_sectors():
         .order("sort_order")
         .execute()
     )
-
     return res.data or []
+
 
 def fetch_langs():
     return {
@@ -24,4 +24,24 @@ def fetch_langs():
             "fr": "Français",
             "de": "Deutsch",
         },
+    }
+
+
+def fetch_publishers():
+    res = (
+        supabase.table("publishers")
+        .select("id, name, url, tier, topic")
+        .eq("active", True)
+        .order("tier")
+        .order("name")
+        .execute()
+    )
+
+    data = res.data or []
+
+    return {
+        "total": len(data),
+        "tier1": [p for p in data if p["tier"] == 1],
+        "tier2": [p for p in data if p["tier"] == 2],
+        "tier3": [p for p in data if p["tier"] == 3],
     }
