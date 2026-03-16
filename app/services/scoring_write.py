@@ -64,3 +64,17 @@ def delete_criterion_source_score(brand_id: int, criterion_id: int, source_id: i
 def recalculate_brand_score(brand_id: int):
     result = compute_brand_score_v2(brand_id)
     return {"ok": True, "brand_id": brand_id, **result}
+
+def recalculate_all_scores():
+    brands_res = supabase.table("brands").select("id").execute()
+    brands = brands_res.data or []
+
+    results = []
+    for b in brands:
+        try:
+            r = compute_brand_score_v2(b["id"])
+            results.append({"brand_id": b["id"], **r})
+        except Exception as e:
+            results.append({"brand_id": b["id"], "error": str(e)})
+
+    return {"ok": True, "processed": len(results), "results": results}
