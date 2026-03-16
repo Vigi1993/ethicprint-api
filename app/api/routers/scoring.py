@@ -8,6 +8,8 @@ from app.services.scoring_read import (
     fetch_criterion_scores,
     fetch_score_verdict,
 )
+from app.services.scoring_write import create_criterion_source_score
+from legacy_main import CriterionSourceScoreIn
 
 router = APIRouter(tags=["scoring"])
 
@@ -30,3 +32,8 @@ def get_criterion_scores(brand_id: int):
 @router.get("/scoring/verdict")
 def get_score_verdict(score: float, lang: str = Query("en")):
     return fetch_score_verdict(score=score, lang=lang)
+
+
+@router.post("/scoring/criterion-score")
+def add_criterion_source_score(data: CriterionSourceScoreIn):
+    return create_criterion_source_score(data)
