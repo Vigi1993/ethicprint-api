@@ -7,6 +7,13 @@ from app.core.config import settings
 from app.integrations.supabase_client import supabase
 
 
+def apply_translation(brand: dict, translation: dict) -> dict:
+    for field in ["note_armi", "note_ambiente", "note_diritti", "note_fisco"]:
+        if translation.get(field):
+            brand[field] = translation[field]
+    return brand
+
+
 def get_translation(brand_id: int, lang: str) -> dict | None:
     if lang == DEFAULT_LANG:
         return None
