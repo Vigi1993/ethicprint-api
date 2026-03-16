@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.api.routers.brands import router as brands_router
 from app.api.routers.categories import router as categories_router
 from app.api.routers.sources import router as sources_router
+from app.api.routers.meta import router as meta_router
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
 
@@ -23,6 +24,7 @@ app.add_middleware(
 app.include_router(brands_router)
 app.include_router(categories_router)
 app.include_router(sources_router)
+app.include_router(meta_router)
 
 
 @app.get("/health")
