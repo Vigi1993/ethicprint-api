@@ -155,12 +155,15 @@ async def fetch_brand_detail(
 
     return formatted
 
-def get_categories():
-    """
-    TODO:
-    copia qui il corpo della vecchia route GET /categories
-    """
-    raise NotImplementedError("Move /categories logic from legacy_main.py into get_categories()")
+def fetch_categories():
+    res = (
+        supabase.table("categories")
+        .select("*")
+        .eq("active", True)
+        .order("sort_order")
+        .execute()
+    )
+    return res.data or []
 
 
 def get_public_sources_summary():
