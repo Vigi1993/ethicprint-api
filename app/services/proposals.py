@@ -298,3 +298,12 @@ def approve_score_proposal(proposal_id: int):
         "category": p["category_key"],
         "category_score": category_score,
     }
+
+def reject_score_proposal(proposal_id: int):
+    (
+        supabase.table("score_proposals")
+        .update({"status": "rejected"})
+        .eq("id", proposal_id)
+        .execute()
+    )
+    return {"message": "Score proposal rejected"}
