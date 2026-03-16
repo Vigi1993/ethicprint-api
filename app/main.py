@@ -6,6 +6,7 @@ from app.api.routers.brands import router as brands_router
 from app.api.routers.categories import router as categories_router
 from app.api.routers.sources import router as sources_router
 from app.api.routers.meta import router as meta_router
+from app.api.routers.brand_sources import router as brand_sources_router
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
 
@@ -25,6 +26,7 @@ app.include_router(brands_router)
 app.include_router(categories_router)
 app.include_router(sources_router)
 app.include_router(meta_router)
+app.include_router(brand_sources_router)
 
 
 @app.get("/health")
