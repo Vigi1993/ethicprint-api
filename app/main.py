@@ -8,6 +8,7 @@ from app.api.routers.sources import router as sources_router
 from app.api.routers.meta import router as meta_router
 from app.api.routers.brand_sources import router as brand_sources_router
 from app.api.routers.scoring import router as scoring_router
+from app.api.routers.contributions import router as contributions_router
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
 
@@ -29,6 +30,7 @@ app.include_router(sources_router)
 app.include_router(meta_router)
 app.include_router(brand_sources_router)
 app.include_router(scoring_router)
+app.include_router(contributions_router)
 
 
 @app.get("/health")
