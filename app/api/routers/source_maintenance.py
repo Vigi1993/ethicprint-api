@@ -4,7 +4,9 @@ from app.services.source_maintenance import (
     find_source_replacement,
     create_replacement_proposal,
     mark_source_resolved,
+    exclude_source_from_criterion,
 )
+from legacy_main import ExclusionIn
 
 router = APIRouter(tags=["source-maintenance"])
 
@@ -22,3 +24,8 @@ def propose_replacement(source_id: int, data: dict):
 @router.post("/sources/{source_id}/mark-resolved")
 def mark_resolved(source_id: int):
     return mark_source_resolved(source_id)
+
+
+@router.post("/sources/{source_id}/exclude-criterion")
+def exclude_criterion(source_id: int, data: ExclusionIn):
+    return exclude_source_from_criterion(source_id=source_id, data=data)
