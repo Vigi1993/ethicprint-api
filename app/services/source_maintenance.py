@@ -186,3 +186,20 @@ def mark_source_resolved(source_id: int):
     ).eq("id", source_id).execute()
 
     return {"ok": True}
+
+def exclude_source_from_criterion(source_id: int, data):
+    """Esclude una fonte da un criterio specifico senza rimuoverla dalle altre."""
+    try:
+        supabase.table("source_criterion_exclusions").upsert(
+            {
+                "brand_id": data.brand_id,
+                "source_id": source_id,
+                "criterion_id": data.criterion_id,
+            },
+            on_conflict="brand_id,source_id,criterion_id",
+        ).execute()
+
+        return {"ok": True}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
