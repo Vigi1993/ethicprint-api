@@ -60,3 +60,7 @@ def delete_criterion_source_score(brand_id: int, criterion_id: int, source_id: i
 
     result = compute_brand_score_v2(brand_id)
     return {"ok": True, **result}
+
+def recalculate_brand_score(brand_id: int):
+    result = compute_brand_score_v2(brand_id)
+    return {"ok": True, "brand_id": brand_id, **result}
