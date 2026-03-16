@@ -179,3 +179,10 @@ def create_replacement_proposal(source_id: int, data: dict):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def mark_source_resolved(source_id: int):
+    supabase.table("sources").update(
+        {"broken": False, "content_missing": False}
+    ).eq("id", source_id).execute()
+
+    return {"ok": True}
