@@ -184,3 +184,33 @@ def fetch_brands_for_contribute(lang: str = "en"):
         }
         for b in brands
     ]
+
+def fetch_contributions_pending():
+    brand_props = (
+        supabase.table("brand_proposals")
+        .select("*")
+        .eq("status", "pending")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+
+    error_reps = (
+        supabase.table("error_reports")
+        .select("*, brands(name, logo)")
+        .eq("status", "pending")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+
+    return {
+        "brand_proposals": brand_props,
+        "error_reports": error_reps,
+        "counts": {
+            "brand_proposals": len(brand_props),
+            "error_reports": len(error_reps),
+        },
+    }
