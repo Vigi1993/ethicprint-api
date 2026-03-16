@@ -1,3 +1,5 @@
+from app.integrations.supabase_client import supabase
+
 def smart_alternatives(brand_id: int, sector_id: int, lang: str, top_n: int = 3) -> list:
     res = supabase.table("brands") \
         .select("id, name, logo, total_score_v2, criteria_published, sectors(key, label, label_en, icon)") \
