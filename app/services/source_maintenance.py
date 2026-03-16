@@ -203,3 +203,18 @@ def exclude_source_from_criterion(source_id: int, data):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def remove_source_exclusion(source_id: int, criterion_id: int, brand_id: int):
+    """Rimuove l'esclusione di una fonte da un criterio."""
+    try:
+        (
+            supabase.table("source_criterion_exclusions")
+            .delete()
+            .eq("source_id", source_id)
+            .eq("criterion_id", criterion_id)
+            .eq("brand_id", brand_id)
+            .execute()
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
