@@ -66,7 +66,7 @@ def fetch_brand_scores(brand_id: int, lang: Optional[str] = "en"):
                 "label_score": (
                     s[f"label_{lang}"]
                     if s and lang != "en" and s.get(f"label_{lang}")
-                    else s["label_en"] if s else SCORE_LABELS[3]["en"]
+                    else s["label_en"] if s else ""
                 ),
                 "notes": s["notes"] if s else None,
                 "last_updated": s["last_updated"] if s else None,
