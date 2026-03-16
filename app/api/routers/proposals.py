@@ -11,7 +11,8 @@ from app.services.proposals import (
     approve_score_proposal,
     reject_score_proposal,
 )
-from legacy_main import ApproveProposalBody, JUDGMENT_VALUES, JUDGMENT_LABELS_IT
+from app.models.schemas import ApproveProposalBody
+from app.core.judgments import JUDGMENT_VALUES, JUDGMENT_LABELS_IT
 
 router = APIRouter(tags=["proposals"])
 
