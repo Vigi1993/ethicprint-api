@@ -1,5 +1,5 @@
 from app.services.scoring import weighted_confidence
-from legacy_main import apply_translation
+from app.services.translations import apply_translation
 
 
 def format_brand(brand: dict, sources: list = [], translation: dict = None, lang: str = "en") -> dict:
