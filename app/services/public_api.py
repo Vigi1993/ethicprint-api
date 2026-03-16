@@ -87,7 +87,7 @@ async def fetch_brand_detail(
     translation = None
     if lang != DEFAULT_LANG:
         translation = get_translation(brand_id, lang)
-        if not translation and background_tasks and ANTHROPIC_KEY:
+        if not translation and background_tasks and settings.ANTHROPIC_API_KEY:
             background_tasks.add_task(
                 generate_and_save_translation,
                 brand_id,
@@ -104,7 +104,7 @@ async def fetch_brand_detail(
 
     formatted["confidence"] = weighted_confidence(sources_res.data or [])
 
-    if not brand_res.data.get("impact_summary_en") and background_tasks and ANTHROPIC_KEY:
+    if not brand_res.data.get("impact_summary_en") and background_tasks and settings.ANTHROPIC_API_KEY:
         try:
             css_res = (
                 supabase.table("criterion_source_scores")
