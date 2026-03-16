@@ -6,9 +6,13 @@ router = APIRouter(tags=["brands"])
 
 @router.get("/brands")
 def list_brands(lang: str = Query("en")):
-    return get_brands(lang=lang)
+    sector: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    lang: Optional[str] = Query("en"),
+):
+    return fetch_brands(sector=sector, search=search, lang=lang)
 
 
 @router.get("/brands/{brand_id}")
 def brand_detail(brand_id: int, lang: str = Query("en")):
-    return get_brand_detail(brand_id=brand_id, lang=lang)
+    return fetch_brand_detail(brand_id=brand_id, lang=lang)
