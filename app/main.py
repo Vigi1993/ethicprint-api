@@ -10,6 +10,7 @@ from app.api.routers.brand_sources import router as brand_sources_router
 from app.api.routers.scoring import router as scoring_router
 from app.api.routers.contributions import router as contributions_router
 from app.api.routers.source_maintenance import router as source_maintenance_router
+from app.api.routers.proposals import router as proposals_router
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
 
@@ -33,6 +34,7 @@ app.include_router(brand_sources_router)
 app.include_router(scoring_router)
 app.include_router(contributions_router)
 app.include_router(source_maintenance_router)
+app.include_router(proposals_router)
 
 
 @app.get("/health")
