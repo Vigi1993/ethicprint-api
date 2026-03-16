@@ -224,3 +224,13 @@ def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
     ).eq("id", proposal_id).execute()
 
     return {"ok": True}
+
+def resolve_error_report(report_id: int, status: str = "resolved"):
+    if status not in ("resolved", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be resolved or rejected")
+
+    supabase.table("error_reports").update(
+        {"status": status}
+    ).eq("id", report_id).execute()
+
+    return {"ok": True}
