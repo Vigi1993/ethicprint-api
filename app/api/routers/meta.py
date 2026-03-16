@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.services.meta import fetch_sectors, fetch_langs
+from app.services.meta import fetch_sectors, fetch_langs, fetch_publishers
 
 router = APIRouter(tags=["meta"])
 
@@ -12,3 +12,8 @@ def get_sectors():
 @router.get("/langs")
 def get_langs():
     return fetch_langs()
+
+
+@router.get("/publishers")
+def get_publishers():
+    return fetch_publishers()
