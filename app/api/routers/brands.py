@@ -14,5 +14,13 @@ def list_brands(lang: str = Query("en")):
 
 
 @router.get("/brands/{brand_id}")
-def brand_detail(brand_id: int, lang: str = Query("en")):
-    return fetch_brand_detail(brand_id=brand_id, lang=lang)
+async def brand_detail(
+    brand_id: int,
+    lang: Optional[str] = Query("en"),
+    background_tasks: BackgroundTasks = None,
+):
+    return await fetch_brand_detail(
+        brand_id=brand_id,
+        lang=lang,
+        background_tasks=background_tasks,
+    ))
