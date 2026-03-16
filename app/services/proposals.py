@@ -198,3 +198,12 @@ async def approve_source_proposal(
         "tier": tier,
         "judgment_saved": bool(judgment and judgment_values and judgment in judgment_values),
     }
+
+def reject_source_proposal(proposal_id: int):
+    (
+        supabase.table("source_proposals")
+        .update({"status": "rejected"})
+        .eq("id", proposal_id)
+        .execute()
+    )
+    return {"message": "Proposal rejected"}
