@@ -9,7 +9,7 @@ from app.services.contributions import (
     resolve_brand_proposal,
     resolve_error_report,
 )
-from legacy_main import BrandProposalIn, SourceProposalIn, ErrorReportIn
+from app.models.schemas import BrandProposalIn, SourceProposalIn, ErrorReportIn
 
 router = APIRouter(tags=["contributions"])
 
