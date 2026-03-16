@@ -6,6 +6,7 @@ from app.services.proposals import (
     fetch_source_proposals,
     revert_source_proposal_to_pending,
     approve_source_proposal,
+    reject_source_proposal,
 )
 from legacy_main import ApproveProposalBody, JUDGMENT_VALUES, JUDGMENT_LABELS_IT
 
@@ -35,3 +36,8 @@ async def approve_proposal(
         judgment_values=JUDGMENT_VALUES,
         judgment_labels_it=JUDGMENT_LABELS_IT,
     )
+
+
+@router.post("/source-proposals/{proposal_id}/reject")
+def reject_proposal(proposal_id: int):
+    return reject_source_proposal(proposal_id=proposal_id)
