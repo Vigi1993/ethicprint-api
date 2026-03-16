@@ -14,7 +14,7 @@ from app.services.scoring_write import (
     recalculate_brand_score,
     recalculate_all_scores,
 )
-from legacy_main import CriterionSourceScoreIn
+from app.models.schemas import CriterionSourceScoreIn
 
 router = APIRouter(tags=["scoring"])
 
