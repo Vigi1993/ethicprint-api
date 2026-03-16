@@ -221,3 +221,80 @@ def fetch_score_proposals(status: str = "pending"):
         "count": len(res.data or []),
         "proposals": res.data or [],
     }
+
+def approve_score_proposal(proposal_id: int):
+    prop_res = (
+        supabase.table("score_proposals")
+        .select("*")
+        .eq("id", proposal_id)
+        .single()
+        .execute()
+    )
+    if not prop_res.data:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    p = prop_res.data
+    criterion_id = p.get("criterion_id")
+    if not criterion_id:
+        raise HTTPException(status_code=400, detail="Proposal has no criterion_id")
+
+    supabase.table("brand_scores").upsert(
+        {
+            "brand_id": p["brand_id"],
+            "criterion_id": criterion_id,
+            "score": p["proposed_score"],
+            "label_en": p.get("proposed_label_en", ""),
+            "label_it": p.get("proposed_label_it", ""),
+            "notes": p.get("motivation", ""),
+            "source_ids": [p["source_id"]] if p.get("source_id") else [],
+            "status": "published",
+            "last_updated": "now()",
+        },
+        on_conflict="brand_id,criterion_id",
+    ).execute()
+
+    criteria_res = (
+        supabase.table("scoring_criteria")
+        .select("id")
+        .eq("category_key", p["category_key"])
+        .eq("active", True)
+        .execute()
+    )
+    criterion_ids = [c["id"] for c in (criteria_res.data or [])]
+
+    scores_res = (
+        supabase.table("brand_scores")
+        .select("score")
+        .eq("brand_id", p["brand_id"])
+        .eq("status", "published")
+        .in_("criterion_id", criterion_ids)
+        .execute()
+    )
+    scores = [row["score"] for row in (scores_res.data or [])]
+
+    if scores:
+        avg = sum(scores) / len(scores)
+        category_score = round((avg - 1) / 4 * 25)
+    else:
+        category_score = 13
+
+    col = f"score_{p['category_key']}"
+    (
+        supabase.table("brands")
+        .update({col: category_score, "last_updated": "now()"})
+        .eq("id", p["brand_id"])
+        .execute()
+    )
+
+    (
+        supabase.table("score_proposals")
+        .update({"status": "approved"})
+        .eq("id", proposal_id)
+        .execute()
+    )
+
+    return {
+        "message": "Score updated",
+        "category": p["category_key"],
+        "category_score": category_score,
+    }
