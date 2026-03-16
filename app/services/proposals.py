@@ -207,3 +207,17 @@ def reject_source_proposal(proposal_id: int):
         .execute()
     )
     return {"message": "Proposal rejected"}
+
+def fetch_score_proposals(status: str = "pending"):
+    res = (
+        supabase.table("score_proposals")
+        .select("*, brands(name), sources(url, title, publisher), scoring_criteria(label_en, label_it, code)")
+        .eq("status", status)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return {
+        "count": len(res.data or []),
+        "proposals": res.data or [],
+    }
