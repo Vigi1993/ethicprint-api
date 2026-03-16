@@ -5,6 +5,7 @@ from app.services.contributions import (
     create_source_proposal,
     create_error_report,
     fetch_brands_for_contribute,
+    fetch_contributions_pending,
 )
 from legacy_main import BrandProposalIn, SourceProposalIn, ErrorReportIn
 
@@ -29,3 +30,8 @@ async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
 @router.get("/contribute/brands-list")
 def get_brands_for_contribute(lang: str = "en"):
     return fetch_brands_for_contribute(lang=lang)
+
+
+@router.get("/contribute/pending")
+def get_contributions_pending():
+    return fetch_contributions_pending()
