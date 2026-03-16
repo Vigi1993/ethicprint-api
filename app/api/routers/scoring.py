@@ -11,6 +11,7 @@ from app.services.scoring_read import (
 from app.services.scoring_write import (
     create_criterion_source_score,
     delete_criterion_source_score,
+    recalculate_brand_score,
 )
 from legacy_main import CriterionSourceScoreIn
 
@@ -49,3 +50,8 @@ def remove_criterion_source_score(brand_id: int, criterion_id: int, source_id: i
         criterion_id=criterion_id,
         source_id=source_id,
     )
+
+
+@router.post("/scoring/recalculate/{brand_id}")
+def recalculate_score(brand_id: int):
+    return recalculate_brand_score(brand_id=brand_id)
