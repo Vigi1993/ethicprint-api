@@ -4,6 +4,7 @@ from app.services.contributions import (
     create_brand_proposal,
     create_source_proposal,
     create_error_report,
+    fetch_brands_for_contribute,
 )
 from legacy_main import BrandProposalIn, SourceProposalIn, ErrorReportIn
 
@@ -23,3 +24,8 @@ async def propose_source_public(data: SourceProposalIn, background_tasks: Backgr
 @router.post("/contribute/error")
 async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
     return await create_error_report(data=data, background_tasks=background_tasks)
+
+
+@router.get("/contribute/brands-list")
+def get_brands_for_contribute(lang: str = "en"):
+    return fetch_brands_for_contribute(lang=lang)
