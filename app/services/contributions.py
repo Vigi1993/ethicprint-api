@@ -107,3 +107,54 @@ async def create_source_proposal(data, background_tasks):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+async def create_error_report(data, background_tasks):
+    if not data.description or len(data.description.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Description too short")
+
+    brand_res = (
+        supabase.table("brands")
+        .select("id, name")
+        .eq("id", data.brand_id)
+        .limit(1)
+        .execute()
+    )
+    if not brand_res.data:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    brand_name = brand_res.data[0].get("name", str(data.brand_id))
+
+    try:
+        res = (
+            supabase.table("error_reports")
+            .insert(
+                {
+                    "brand_id": data.brand_id,
+                    "category_key": data.category_key,
+                    "description": data.description.strip(),
+                    "source_url": data.source_url,
+                    "submitter": data.submitter,
+                    "status": "pending",
+                }
+            )
+            .execute()
+        )
+
+        new_id = res.data[0]["id"] if res.data else None
+
+        background_tasks.add_task(
+            notify_contribution,
+            "error",
+            {
+                "Brand": brand_name,
+                "Category": data.category_key or "—",
+                "Description": data.description.strip(),
+                "Source URL": data.source_url or "—",
+                "Submitted by": data.submitter or "anonymous",
+            },
+        )
+
+        return {"ok": True, "id": new_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
