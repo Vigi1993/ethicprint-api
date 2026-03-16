@@ -2,7 +2,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from app.services.scoring_read import fetch_scoring_criteria, fetch_brand_scores
+from app.services.scoring_read import (
+    fetch_scoring_criteria,
+    fetch_brand_scores,
+    fetch_criterion_scores,
+)
 
 router = APIRouter(tags=["scoring"])
 
@@ -15,3 +19,8 @@ def get_scoring_criteria():
 @router.get("/brands/{brand_id}/scores")
 def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
     return fetch_brand_scores(brand_id=brand_id, lang=lang)
+
+
+@router.get("/scoring/criterion-scores/{brand_id}")
+def get_criterion_scores(brand_id: int):
+    return fetch_criterion_scores(brand_id)
