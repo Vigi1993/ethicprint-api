@@ -6,6 +6,7 @@ from app.services.contributions import (
     create_error_report,
     fetch_brands_for_contribute,
     fetch_contributions_pending,
+    resolve_brand_proposal,
 )
 from legacy_main import BrandProposalIn, SourceProposalIn, ErrorReportIn
 
@@ -30,6 +31,10 @@ async def report_error(data: ErrorReportIn, background_tasks: BackgroundTasks):
 @router.get("/contribute/brands-list")
 def get_brands_for_contribute(lang: str = "en"):
     return fetch_brands_for_contribute(lang=lang)
+
+@router.post("/contribute/brand-proposal/{proposal_id}/resolve")
+def resolve_brand_proposal_endpoint(proposal_id: int, status: str = "approved"):
+    return resolve_brand_proposal(proposal_id=proposal_id, status=status)
 
 
 @router.get("/contribute/pending")
