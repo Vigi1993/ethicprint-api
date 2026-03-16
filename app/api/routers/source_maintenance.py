@@ -7,7 +7,7 @@ from app.services.source_maintenance import (
     exclude_source_from_criterion,
     remove_source_exclusion,
 )
-from legacy_main import ExclusionIn
+from app.models.schemas import ExclusionIn
 
 router = APIRouter(tags=["source-maintenance"])
 
