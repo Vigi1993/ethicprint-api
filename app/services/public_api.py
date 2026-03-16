@@ -5,14 +5,11 @@ from fastapi import HTTPException, BackgroundTasks
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
 from app.integrations.supabase_client import supabase
 from app.services.scoring import weighted_confidence, compute_criterion_score
-from legacy_main import (
-    format_brand,
-    get_translation,
-    generate_and_save_translation,
-    generate_impact_summary,
-    smart_alternatives,
-    ANTHROPIC_KEY,
-)
+from app.services.brand_formatter import format_brand
+from app.services.translations import get_translation, generate_and_save_translation
+from app.services.ai_tasks import generate_impact_summary
+from app.services.alternatives import smart_alternatives
+from app.core.config import settings
 
 
 def fetch_brands(
