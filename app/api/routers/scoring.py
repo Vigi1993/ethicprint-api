@@ -6,6 +6,7 @@ from app.services.scoring_read import (
     fetch_scoring_criteria,
     fetch_brand_scores,
     fetch_criterion_scores,
+    fetch_score_verdict,
 )
 
 router = APIRouter(tags=["scoring"])
@@ -24,3 +25,8 @@ def get_brand_scores(brand_id: int, lang: Optional[str] = Query("en")):
 @router.get("/scoring/criterion-scores/{brand_id}")
 def get_criterion_scores(brand_id: int):
     return fetch_criterion_scores(brand_id)
+
+
+@router.get("/scoring/verdict")
+def get_score_verdict(score: float, lang: str = Query("en")):
+    return fetch_score_verdict(score=score, lang=lang)
