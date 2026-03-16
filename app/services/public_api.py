@@ -10,7 +10,13 @@ from app.services.translations import get_translation, generate_and_save_transla
 from app.services.ai_tasks import generate_impact_summary
 from app.services.alternatives import smart_alternatives
 from app.core.config import settings
-
+from legacy_main import (
+    get_translation,
+    generate_and_save_translation,
+    generate_impact_summary,
+    smart_alternatives,
+    ANTHROPIC_KEY,
+)
 
 def fetch_brands(
     sector: Optional[str] = None,
