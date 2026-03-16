@@ -1,25 +1,37 @@
+import json
+
+import httpx
+
 from app.core.config import settings
+from app.core.constants import CATS
 from app.integrations.supabase_client import supabase
+from app.services.scoring import get_verdict
+
 
 async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: list = None) -> dict:
-    if not ANTHROPIC_KEY:
+    if not settings.ANTHROPIC_API_KEY:
         return {}
-    import httpx as _httpx
+
     name = brand.get("name", "")
     sector = (brand.get("sectors") or {}).get("label_en", "")
     total_score = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
+
     if total_score is None or criteria_published == 0:
         return {}
+
     verdict = get_verdict(total_score)
     band = verdict["band"]
+
     notes = {
-        "armi":     brand.get("note_armi", "") or "",
+        "armi": brand.get("note_armi", "") or "",
         "ambiente": brand.get("note_ambiente", "") or "",
-        "diritti":  brand.get("note_diritti", "") or "",
-        "fisco":    brand.get("note_fisco", "") or "",
+        "diritti": brand.get("note_diritti", "") or "",
+        "fisco": brand.get("note_fisco", "") or "",
     }
+
     notes_text = "\n".join([f"- {cat}: {notes[cat]}" for cat in CATS if notes[cat]])
+
     criteria_text = ""
     if criterion_scores:
         lines = []
@@ -30,6 +42,7 @@ async def generate_impact_summary(brand_id: int, brand: dict, criterion_scores: 
                 lines.append(f"  - {label}: {'+' if score > 0 else ''}{score}/20")
         if lines:
             criteria_text = "Criteria scores (−20 to +20):\n" + "\n".join(lines)
+
     prompt = f"""You are writing a concise ethical impact summary for EthicPrint, a brand ethics scoring tool.
 
 Brand: {name}
@@ -46,25 +59,46 @@ Be specific, factual, and direct. No marketing language. Focus on the strongest 
 
 Return ONLY valid JSON:
 {{"en": "English sentence here.", "it": "Frase italiana qui."}}"""
+
     try:
-        async with _httpx.AsyncClient() as c:
+        async with httpx.AsyncClient() as c:
             r = await c.post(
                 "https://api.anthropic.com/v1/messages",
-                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
-                      "messages": [{"role": "user", "content": prompt}]},
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": settings.ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
                 timeout=30,
             )
-            text = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
-            result = __import__("json").loads(text)
+
+            text = (
+                r.json()["content"][0]["text"]
+                .strip()
+                .replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
+
+            result = json.loads(text)
             en = result.get("en", "")
             it = result.get("it", "")
+
             if en and it:
-                supabase.table("brands").update({
-                    "impact_summary_en": en,
-                    "impact_summary_it": it,
-                }).eq("id", brand_id).execute()
+                supabase.table("brands").update(
+                    {
+                        "impact_summary_en": en,
+                        "impact_summary_it": it,
+                    }
+                ).eq("id", brand_id).execute()
+
             return {"en": en, "it": it}
+
     except Exception as e:
         print(f"generate_impact_summary error: {e}")
         return {}
