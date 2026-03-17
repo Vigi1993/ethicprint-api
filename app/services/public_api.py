@@ -4,7 +4,11 @@ from fastapi import HTTPException, BackgroundTasks
 
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
 from app.integrations.supabase_client import supabase
-from app.services.scoring import weighted_confidence, compute_criterion_score
+from app.services.scoring import (
+    weighted_confidence,
+    compute_criterion_score,
+    source_confidence_v2,
+)
 from app.services.brand_formatter import format_brand
 from app.services.translations import get_translation, generate_and_save_translation
 from app.services.ai_tasks import generate_impact_summary
@@ -70,19 +74,58 @@ async def fetch_brand_detail(
         .single()
         .execute()
     )
-
     if not brand_res.data:
         raise HTTPException(status_code=404, detail="Brand not found")
 
-    sources_res = (
-        supabase.table("sources")
-        .select("id, url, title, publisher, published_at, category_key, tier")
+    # fonte di verità della BrandCard = solo score v2 pubblicati
+    css_res = (
+        supabase.table("criterion_source_scores")
+        .select(
+            "criterion_id, source_id, tier, value, status, scoring_criteria(category_key)"
+        )
         .eq("brand_id", brand_id)
-        .neq("broken", True)
-        .neq("content_missing", True)
-        .order("category_key")
+        .eq("status", "published")
         .execute()
     )
+    css_rows = css_res.data or []
+
+    source_ids = list(
+        {
+            row["source_id"]
+            for row in css_rows
+            if row.get("source_id") is not None
+        }
+    )
+
+    published_sources = []
+    if source_ids:
+        sources_res = (
+            supabase.table("sources")
+            .select("id, url, title, publisher, published_at")
+            .in_("id", source_ids)
+            .neq("broken", True)
+            .neq("content_missing", True)
+            .execute()
+        )
+        source_map = {s["id"]: s for s in (sources_res.data or [])}
+
+        for row in css_rows:
+            src = source_map.get(row.get("source_id"))
+            if not src:
+                continue
+
+            category_key = (row.get("scoring_criteria") or {}).get("category_key")
+            published_sources.append(
+                {
+                    "id": src["id"],
+                    "url": src.get("url"),
+                    "title": src.get("title"),
+                    "publisher": src.get("publisher"),
+                    "published_at": src.get("published_at"),
+                    "category_key": category_key,
+                    "tier": row.get("tier", 3),
+                }
+            )
 
     translation = None
     if lang != DEFAULT_LANG:
@@ -97,25 +140,16 @@ async def fetch_brand_detail(
 
     formatted = format_brand(
         brand_res.data,
-        sources_res.data or [],
+        published_sources,
         translation,
         lang=lang,
     )
 
-    formatted["confidence"] = weighted_confidence(sources_res.data or [])
+    formatted["confidence"] = source_confidence_v2(css_rows)
 
     if not brand_res.data.get("impact_summary_en") and background_tasks and settings.ANTHROPIC_API_KEY:
         try:
-            css_res = (
-                supabase.table("criterion_source_scores")
-                .select("*, scoring_criteria(label_en, category_key)")
-                .eq("brand_id", brand_id)
-                .eq("status", "published")
-                .execute()
-            )
-            css_rows = css_res.data or []
             by_crit = {}
-
             for r in css_rows:
                 cid = r["criterion_id"]
                 if cid not in by_crit:
