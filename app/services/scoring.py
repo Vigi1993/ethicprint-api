@@ -102,10 +102,9 @@ def compute_brand_score_v2(brand_id: int) -> dict[str, Any]:
         .eq("brand_id", brand_id)
         .execute()
     )
-
     all_css = css_res.data or []
-    by_criterion: dict[int, list[dict[str, Any]]] = {}
 
+    by_criterion: dict[int, list[dict[str, Any]]] = {}
     for row in all_css:
         cid = row["criterion_id"]
         by_criterion.setdefault(cid, []).append(row)
@@ -118,27 +117,36 @@ def compute_brand_score_v2(brand_id: int) -> dict[str, Any]:
         result = compute_criterion_score(rows)
         criterion_results[cid] = result
 
+        # salva SEMPRE lo stato corrente del criterio
         if result["criteria_met"] and result["score"] is not None:
             total += result["score"]
             criteria_published += 1
 
+            payload = {
+                "brand_id": brand_id,
+                "criterion_id": cid,
+                "computed_score": result["score"],
+                "criteria_met": True,
+                "status": "published",
+                "last_updated": "now()",
+            }
+        else:
+            payload = {
+                "brand_id": brand_id,
+                "criterion_id": cid,
+                "computed_score": None,
+                "criteria_met": False,
+                "status": "pending",
+                "last_updated": "now()",
+            }
+
         (
             supabase.table("brand_scores")
-            .upsert(
-                {
-                    "brand_id": brand_id,
-                    "criterion_id": cid,
-                    "computed_score": result["score"],
-                    "criteria_met": True,
-                    "status": "published",
-                    "last_updated": "now()",
-                },
-                on_conflict="brand_id,criterion_id",
-            )
+            .upsert(payload, on_conflict="brand_id,criterion_id")
             .execute()
         )
 
-    total_rounded = round(total, 1)
+    total_rounded = round(total, 1) if criteria_published > 0 else None
 
     (
         supabase.table("brands")
