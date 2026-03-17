@@ -145,6 +145,7 @@ async def fetch_brand_detail(
         lang=lang,
     )
 
+    formatted["scores"] = _build_category_scores_from_css(css_rows)
     formatted["confidence"] = source_confidence_v2(css_rows)
 
     if not brand_res.data.get("impact_summary_en") and background_tasks and settings.ANTHROPIC_API_KEY:
@@ -230,3 +231,43 @@ def fetch_public_sources():
         "tier2": by_tier[2],
         "tier3": by_tier[3],
     }
+
+def _build_category_scores_from_css(css_rows: list[dict]) -> dict:
+    result = {
+        "armi": None,
+        "ambiente": None,
+        "diritti": None,
+        "fisco": None,
+    }
+
+    by_category = {
+        "armi": [],
+        "ambiente": [],
+        "diritti": [],
+        "fisco": [],
+    }
+
+    by_criterion = {}
+    for r in css_rows:
+        cid = r["criterion_id"]
+        if cid not in by_criterion:
+            by_criterion[cid] = {
+                "category_key": (r.get("scoring_criteria") or {}).get("category_key"),
+                "rows": [],
+            }
+        by_criterion[cid]["rows"].append(r)
+
+    for _, data in by_criterion.items():
+        cat = data["category_key"]
+        if cat not in by_category:
+            continue
+
+        comp = compute_criterion_score(data["rows"])
+        if comp["criteria_met"] and comp["score"] is not None:
+            by_category[cat].append(comp["score"])
+
+    for cat, scores in by_category.items():
+        if scores:
+            result[cat] = round(sum(scores), 1)
+
+    return result
