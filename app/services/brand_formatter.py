@@ -1,5 +1,6 @@
 from app.services.scoring import weighted_confidence
 from app.services.translations import apply_translation
+from app.core.judgments import raw_score_to_public_score, public_score_label
 
 V2_CATEGORY_KEYS = ["armi", "ambiente", "diritti", "fisco"]
 
@@ -56,6 +57,12 @@ def format_brand(
     confidence = weighted_confidence(sources)
     total_score_v2 = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
+    public_score = (
+    raw_score_to_public_score(total_score_v2)
+    if criteria_published > 0
+    else None
+    )
+    public_label = public_score_label(public_score, lang)
     insufficient_data = total_score_v2 is None and criteria_published == 0
 
     return {
@@ -80,4 +87,6 @@ def format_brand(
         ),
         "alternatives": [],
         "last_updated": brand.get("last_updated"),
+        "public_score": public_score,
+        "public_label": public_label,
     }
