@@ -47,51 +47,16 @@ def fetch_publishers():
     }
 
 def get_recent_source_updates(limit: int = 20) -> list[dict]:
-    """
-    Restituisce le ultime valutazioni fonte/criterio pubblicate,
-    con join su brands, sources, criteria.
-    """
     try:
+        # prima controlla quante righe ci sono in totale
         res = (
             supabase.table("criterion_source_scores")
-            .select(
-                "value, judgment, label_en, label_it, updated_at, "
-                "brands(id, name), "
-                "sources(id, url, title, publisher), "
-                "criteria(id, category_key)"
-            )
-            .eq("status", "published")
-            .order("updated_at", desc=True)
-            .limit(limit)
+            .select("*")
+            .limit(5)
             .execute()
         )
-
-        results = []
-        for row in res.data or []:
-            brand = row.get("brands") or {}
-            source = row.get("sources") or {}
-            criterion = row.get("criteria") or {}
-
-            if not brand or not source:
-                continue
-
-            results.append({
-                "brand_id": brand.get("id"),
-                "brand_name": brand.get("name", ""),
-                "category_key": criterion.get("category_key", ""),
-                "value": row.get("value"),
-                "judgment": row.get("judgment", ""),
-                "label_en": row.get("label_en", ""),
-                "label_it": row.get("label_it", ""),
-                "source_id": source.get("id"),
-                "title": source.get("title", ""),
-                "publisher": source.get("publisher", ""),
-                "url": source.get("url", ""),
-                "created_at": row.get("updated_at"),
-            })
-
-        return results
-
+        print("DEBUG criterion_source_scores:", res.data)
+        return res.data or []
     except Exception as e:
         print(f"get_recent_source_updates error: {e}")
         return []
