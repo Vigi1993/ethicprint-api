@@ -17,3 +17,8 @@ def get_langs():
 @router.get("/publishers")
 def get_publishers():
     return fetch_publishers()
+
+@router.get("/recent-source-updates")
+def recent_source_updates(limit: int = 20):
+    from app.services.meta import get_recent_source_updates
+    return get_recent_source_updates(limit=min(limit, 50))
