@@ -57,41 +57,35 @@ def get_recent_source_updates(limit: int = 20) -> list[dict]:
             .execute()
         )
 
-        print("DEBUG rows:", len(res.data or []), res.data)
-
         results = []
         for row in res.data or []:
-            print("DEBUG row:", row)
-
             brand_res = supabase.table("brands").select("id, name").eq("id", row["brand_id"]).single().execute()
-            print("DEBUG brand:", brand_res.data)
+            brand = brand_res.data or {}
 
             source_res = supabase.table("sources").select("id, url, title, publisher").eq("id", row["source_id"]).single().execute()
-            print("DEBUG source:", source_res.data)
+            source = source_res.data or {}
 
-            criterion_res = supabase.table("criteria").select("id, category_key").eq("id", row["criterion_id"]).single().execute()
-            print("DEBUG criterion:", criterion_res.data)
+            criterion_res = supabase.table("scoring_criteria").select("id, category_key").eq("id", row["criterion_id"]).single().execute()
+            criterion = criterion_res.data or {}
 
-            if not brand_res.data or not source_res.data:
-                print("DEBUG skipped — missing brand or source")
+            if not brand or not source:
                 continue
 
             results.append({
-                "brand_id": brand_res.data.get("id"),
-                "brand_name": brand_res.data.get("name", ""),
-                "category_key": criterion_res.data.get("category_key", "") if criterion_res.data else "",
+                "brand_id": brand.get("id"),
+                "brand_name": brand.get("name", ""),
+                "category_key": criterion.get("category_key", ""),
                 "value": row.get("value"),
                 "judgment": row.get("judgment", ""),
                 "label_en": row.get("label_en", ""),
                 "label_it": row.get("label_it", ""),
-                "source_id": source_res.data.get("id"),
-                "title": source_res.data.get("title", ""),
-                "publisher": source_res.data.get("publisher", ""),
-                "url": source_res.data.get("url", ""),
+                "source_id": source.get("id"),
+                "title": source.get("title", ""),
+                "publisher": source.get("publisher", ""),
+                "url": source.get("url", ""),
                 "created_at": row.get("created_at"),
             })
 
-        print("DEBUG results:", results)
         return results
 
     except Exception as e:
