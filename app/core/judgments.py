@@ -15,19 +15,19 @@ JUDGMENT_LABELS_IT = {
 from typing import Optional
 
 PUBLIC_SCORE_LABELS_EN = [
-    (19, "Critical"),
-    (39, "Problematic"),
-    (59, "Controversial"),
-    (79, "Positive"),
-    (100, "Virtuous"),
+    (24, "Ethically Compromised"),
+    (44, "Scarcely Ethical"),
+    (54, "Partially Ethical"),
+    (74, "Fairly Ethical"),
+    (100, "Deeply Ethical"),
 ]
 
 PUBLIC_SCORE_LABELS_IT = [
-    (19, "Critico"),
-    (39, "Problematico"),
-    (59, "Controverso"),
-    (79, "Positivo"),
-    (100, "Virtuoso"),
+    (24, "Eticamente Inadeguato"),
+    (44, "Scarsamente Etico"),
+    (54, "Parzialmente Etico"),
+    (74, "Abbastanza Etico"),
+    (100, "Profondamente Etico"),
 ]
 
 
