@@ -57,20 +57,11 @@ def format_brand(
     confidence = weighted_confidence(sources)
     total_score_v2 = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
-def _compute_public_score_from_categories(scores: dict, confidence: dict) -> Optional[int]:
-    values = []
-    for cat in V2_CATEGORY_KEYS:
-        if confidence.get(cat, {}).get("criteria_met"):
-            raw = scores.get(cat)
-            if raw is not None:
-                from app.core.judgments import raw_score_to_public_score as _rsp
-                # scala per categoria: -100/+100 (5 criteri × ±20)
-                clamped = max(-100, min(100, raw))
-                pub = round(((clamped + 100) / 200) * 100)
-                values.append(pub)
-    if not values:
-        return None
-    return round(sum(values) / len(values))
+public_score = (
+    raw_score_to_public_score(total_score_v2)
+    if criteria_published > 0
+    else None
+)
     public_label = public_score_label(public_score, lang)
     insufficient_data = total_score_v2 is None and criteria_published == 0
 
