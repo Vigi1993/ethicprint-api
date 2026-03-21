@@ -57,11 +57,11 @@ def format_brand(
     confidence = weighted_confidence(sources)
     total_score_v2 = brand.get("total_score_v2")
     criteria_published = brand.get("criteria_published", 0) or 0
-public_score = (
+    public_score = (
     raw_score_to_public_score(total_score_v2)
     if criteria_published > 0
     else None
-)
+    )
     public_label = public_score_label(public_score, lang)
     insufficient_data = total_score_v2 is None and criteria_published == 0
 
