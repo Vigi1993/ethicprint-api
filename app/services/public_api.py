@@ -147,6 +147,20 @@ async def fetch_brand_detail(
 
     formatted["scores"] = _build_category_scores_from_css(css_rows)
     formatted["confidence"] = source_confidence_v2(css_rows)
+    
+    from app.core.judgments import public_score_label
+    
+    cat_public_scores = []
+    for cat in ["armi", "ambiente", "diritti", "fisco"]:
+        if formatted["confidence"].get(cat, {}).get("criteria_met"):
+            raw = formatted["scores"].get(cat)
+            if raw is not None:
+                clamped = max(-100, min(100, raw))
+                pub = round(((clamped + 100) / 200) * 100)
+                cat_public_scores.append(pub)
+    
+    formatted["public_score"] = round(sum(cat_public_scores) / len(cat_public_scores)) if cat_public_scores else None
+    formatted["public_label"] = public_score_label(formatted["public_score"], lang)
 
     if not brand_res.data.get("impact_summary_en") and background_tasks and settings.ANTHROPIC_API_KEY:
         try:
