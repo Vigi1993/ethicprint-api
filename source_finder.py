@@ -14,6 +14,7 @@ import httpx
 import asyncio
 import random
 from datetime import datetime, timezone
+from itertools import groupby
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -86,7 +87,6 @@ async def evaluate_source(brand_name: str, category_key: str, candidate: dict) -
         return None
     cat_desc = CATEGORY_LABELS.get(category_key, category_key)
 
-    # Mappa criteri per categoria per aiutare Claude a suggerire il criterio specifico
     criteria_map = {
         "armi":     "arms_production, arms_exports, controversial_clients, military_contracts, dual_use",
         "diritti":  "labor_rights, supply_chain, discrimination, freedom_expression, indigenous_rights",
@@ -159,7 +159,14 @@ def get_cat_status(brand_id: int, cat_key: str) -> dict:
     from datetime import timedelta
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=FRESHNESS_MONTHS * 30)
 
-    res = supabase.table("sources")        .select("id, published_at")        .eq("brand_id", brand_id)        .eq("category_key", cat_key)        .eq("broken", False)        .execute()
+    res = (
+        supabase.table("sources")
+        .select("id, published_at")
+        .eq("brand_id", brand_id)
+        .eq("category_key", cat_key)
+        .eq("broken", False)
+        .execute()
+    )
     sources = res.data or []
     total = len(sources)
 
@@ -167,7 +174,7 @@ def get_cat_status(brand_id: int, cat_key: str) -> dict:
     for s in sources:
         pub = s.get("published_at")
         if not pub:
-            fresh += 1  # senza data consideriamo fresca
+            fresh += 1
             continue
         try:
             pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
@@ -176,43 +183,30 @@ def get_cat_status(brand_id: int, cat_key: str) -> dict:
         except Exception:
             fresh += 1
 
-    # Cerca nuove fonti se:
-    # - totale < MIN → categoria insufficiente, urgente
-    # - totale >= MIN ma fresche < MIN → fonti obsolete, serve aggiornamento
-    # - totale >= MAX → non cerca (abbastanza fonti fresche)
     needs_search = total < MAX_SOURCES_PER_CAT and fresh < MIN_SOURCES_PER_CAT
 
     return {"total": total, "fresh": fresh, "needs_search": needs_search}
 
 
 async def find_new_sources(brand: dict) -> int:
-    """
-    Cerca nuove fonti per le categorie che ne hanno bisogno.
-    Logica per categoria:
-      - total >= MAX e fresh >= MIN → skip (abbastanza fonti fresche)
-      - fresh < MIN              → cerca (fonti obsolete o insufficienti)
-    Priorità: insufficient (1 fonte) > none (0 fonti) > stale (vecchie)
-    """
     brand_name = brand["name"]
     brand_id = brand["id"]
     total_proposals = 0
 
-    # Calcola status per ogni categoria e ordina per priorità
     cat_statuses = []
     for cat_key in CATEGORY_LABELS:
         status = get_cat_status(brand_id, cat_key)
         priority = 0
         if status["total"] == 0:
-            priority = 2      # nessuna fonte → alta priorità
+            priority = 2
         elif status["total"] < MIN_SOURCES_PER_CAT:
-            priority = 3      # insufficiente → priorità massima
+            priority = 3
         elif status["fresh"] < MIN_SOURCES_PER_CAT:
-            priority = 1      # fonti obsolete → priorità media
+            priority = 1
         status["cat_key"] = cat_key
         status["priority"] = priority
         cat_statuses.append(status)
 
-    # Ordina per priorità decrescente
     cat_statuses.sort(key=lambda x: x["priority"], reverse=True)
 
     for cat_status in cat_statuses:
@@ -231,7 +225,6 @@ async def find_new_sources(brand: dict) -> int:
             if not candidate.get("url"):
                 continue
 
-            # Salta se URL già presente nel DB o già proposta
             existing = supabase.table("sources").select("id").eq("url", candidate["url"]).execute()
             existing_prop = supabase.table("source_proposals").select("id").eq("url", candidate["url"]).execute()
             if existing.data or existing_prop.data:
@@ -257,7 +250,7 @@ async def find_new_sources(brand: dict) -> int:
                 total_proposals += 1
                 found += 1
                 if found >= (MIN_SOURCES_PER_CAT - cat_status["fresh"]):
-                    break  # cerca solo quante ne mancano
+                    break
 
             await asyncio.sleep(1)
 
@@ -270,10 +263,14 @@ async def send_notification(total_proposals: int):
     if not RESEND_KEY or not NOTIFY_EMAIL or total_proposals == 0:
         return
 
-    proposals = supabase.table("source_proposals").select("id, url, title, publisher, brand_id, category_key, job_type")\
-        .eq("status", "pending").execute().data or []
+    proposals = (
+        supabase.table("source_proposals")
+        .select("id, url, title, publisher, brand_id, category_key, job_type")
+        .eq("status", "pending")
+        .execute()
+        .data or []
+    )
 
-    # Raggruppa per brand
     from collections import defaultdict
     by_brand = defaultdict(list)
     for p in proposals:
@@ -282,7 +279,11 @@ async def send_notification(total_proposals: int):
     cat_icons = {"armi": "⚔️", "ambiente": "🌿", "diritti": "🤝", "fisco": "💰"}
     brand_sections = ""
     for brand_id, brand_proposals in by_brand.items():
-        brand_name = brand_proposals[0].get("brands", {}).get("name", f"Brand {brand_id}") if isinstance(brand_proposals[0].get("brands"), dict) else f"Brand {brand_id}"
+        brand_name = (
+            brand_proposals[0].get("brands", {}).get("name", f"Brand {brand_id}")
+            if isinstance(brand_proposals[0].get("brands"), dict)
+            else f"Brand {brand_id}"
+        )
         rows = "".join(
             f"<tr>"
             f"<td style='padding:8px 6px;border-bottom:1px solid #f0f0f0;font-size:12px'>{cat_icons.get(p.get('category_key',''),'•')} {p.get('category_key','').capitalize()}</td>"
@@ -320,7 +321,7 @@ async def send_notification(total_proposals: int):
 
     try:
         async with httpx.AsyncClient() as c:
-            r = await c.post(
+            await c.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json"},
                 json={
@@ -345,31 +346,29 @@ async def run_finder(limit: int | None = None):
         print(f"Mode: full weekly run")
     print(f"{'='*50}\n")
 
-    # Priorità ai brand con meno fonti
     brands_res = supabase.table("brands").select("id, name").order("name").execute()
     all_brands = brands_res.data or []
 
-    # Ordina per numero di fonti esistenti (meno fonti = priorità maggiore)
     def source_count(brand):
         res = supabase.table("sources").select("id", count="exact").eq("brand_id", brand["id"]).execute()
         return res.count or 0
 
     brands_sorted = sorted(all_brands, key=source_count)
 
-    # Applica limit se specificato
-    brands_sorted = sorted(all_brands, key=source_count)
-    # Mescola i brand con stesso numero di fonti per coprire brand diversi ad ogni run
-    from itertools import groupby
+    # Mescola brand con stesso numero di fonti per coprire brand diversi ad ogni run
     grouped = []
     for _, group in groupby(brands_sorted, key=source_count):
         g = list(group)
         random.shuffle(g)
         grouped.extend(g)
-    brands_sorted = grouped
-    print(f"Processing {len(brands)} of {len(all_brands)} brands\n")
+
+    # Applica limit se specificato
+    brands_to_process = grouped[:limit] if limit else grouped
+
+    print(f"Processing {len(brands_to_process)} of {len(all_brands)} brands\n")
 
     total_proposals = 0
-    for brand in brands:
+    for brand in brands_to_process:
         print(f"\n[{brand['name']}]")
         count = await find_new_sources(brand)
         total_proposals += count
@@ -384,9 +383,7 @@ async def run_finder(limit: int | None = None):
 
 if __name__ == "__main__":
     import sys
-    # Uso: python source_finder.py [limit]
-    # Es:  python source_finder.py 10   → processa solo 10 brand
-    #      python source_finder.py       → processa tutti
+
     limit_arg = None
     if len(sys.argv) > 1:
         try:
@@ -394,7 +391,7 @@ if __name__ == "__main__":
             print(f"Manual run with limit={limit_arg}")
         except ValueError:
             print(f"Invalid limit '{sys.argv[1]}', running full")
-    # Env override (utile per Railway cron)
+
     env_limit = os.getenv("FINDER_LIMIT")
     if env_limit and limit_arg is None:
         try:
