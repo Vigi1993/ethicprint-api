@@ -12,6 +12,7 @@ import os
 import json
 import httpx
 import asyncio
+import random
 from datetime import datetime, timezone
 from supabase import create_client
 
@@ -356,7 +357,15 @@ async def run_finder(limit: int | None = None):
     brands_sorted = sorted(all_brands, key=source_count)
 
     # Applica limit se specificato
-    brands = brands_sorted[:limit] if limit else brands_sorted
+    brands_sorted = sorted(all_brands, key=source_count)
+    # Mescola i brand con stesso numero di fonti per coprire brand diversi ad ogni run
+    from itertools import groupby
+    grouped = []
+    for _, group in groupby(brands_sorted, key=source_count):
+        g = list(group)
+        random.shuffle(g)
+        grouped.extend(g)
+    brands_sorted = grouped
     print(f"Processing {len(brands)} of {len(all_brands)} brands\n")
 
     total_proposals = 0
