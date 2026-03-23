@@ -136,7 +136,7 @@ def compute_brand_score_v2(brand_id: int) -> dict[str, Any]:
                 "criterion_id": cid,
                 "computed_score": None,
                 "criteria_met": False,
-                "status": "pending",
+                "status": "draft",
                 "last_updated": "now()",
             }
 
