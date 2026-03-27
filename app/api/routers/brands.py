@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query, BackgroundTasks, HTTPException
 from app.services.public_api import fetch_brands, fetch_brand_detail
-from app.db.supabase_client import supabase
+from app.integrations.supabase_client import supabase
 from datetime import datetime, timezone
 
 router = APIRouter(tags=["brands"])
