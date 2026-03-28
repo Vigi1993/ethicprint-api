@@ -57,19 +57,26 @@ def get_recent_source_updates(limit: int = 20) -> list[dict]:
             .execute()
         )
 
+        # Carica tutti i publisher in memoria (una sola query)
+        pub_res = supabase.table("publishers").select("name, tier").execute()
+        publisher_tier_map = {
+            p["name"]: p["tier"] for p in (pub_res.data or [])
+        }
+
         results = []
         for row in res.data or []:
             brand_res = supabase.table("brands").select("id, name").eq("id", row["brand_id"]).single().execute()
             brand = brand_res.data or {}
-
             source_res = supabase.table("sources").select("id, url, title, publisher").eq("id", row["source_id"]).single().execute()
             source = source_res.data or {}
-
             criterion_res = supabase.table("scoring_criteria").select("id, category_key").eq("id", row["criterion_id"]).single().execute()
             criterion = criterion_res.data or {}
 
             if not brand or not source:
                 continue
+
+            publisher_name = source.get("publisher", "")
+            tier = publisher_tier_map.get(publisher_name)  # None se non trovato
 
             results.append({
                 "brand_id": brand.get("id"),
@@ -81,13 +88,12 @@ def get_recent_source_updates(limit: int = 20) -> list[dict]:
                 "label_it": row.get("label_it", ""),
                 "source_id": source.get("id"),
                 "title": source.get("title", ""),
-                "publisher": source.get("publisher", ""),
+                "publisher": publisher_name,
                 "url": source.get("url", ""),
                 "created_at": row.get("created_at"),
+                "tier": tier,  # ← nuovo campo
             })
-
         return results
-
     except Exception as e:
         print(f"get_recent_source_updates error: {e}")
         return []
