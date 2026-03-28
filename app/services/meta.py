@@ -76,7 +76,7 @@ def get_recent_source_updates(limit: int = 20) -> list[dict]:
                 continue
 
             publisher_name = source.get("publisher", "")
-            tier = publisher_tier_map.get(publisher_name)  # None se non trovato
+            tier = publisher_tier_map.get(publisher_name, 3) 
 
             results.append({
                 "brand_id": brand.get("id"),
