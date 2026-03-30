@@ -37,6 +37,7 @@ def revert_source_proposal_to_pending(proposal_id: int):
     p = prop_res.data
 
     if p["status"] == "approved":
+        # Rimuove TUTTE le righe in sources con stessa URL e brand (multi-categoria)
         src_res = (
             supabase.table("sources")
             .select("id")
@@ -45,23 +46,24 @@ def revert_source_proposal_to_pending(proposal_id: int):
             .execute()
         )
         if src_res.data:
-            source_id = src_res.data[0]["id"]
+            for src in src_res.data:
+                source_id = src["id"]
 
-            (
-                supabase.table("criterion_source_scores")
-                .delete()
-                .eq("source_id", source_id)
-                .execute()
-            )
+                (
+                    supabase.table("criterion_source_scores")
+                    .delete()
+                    .eq("source_id", source_id)
+                    .execute()
+                )
 
-            (
-                supabase.table("source_criterion_exclusions")
-                .delete()
-                .eq("source_id", source_id)
-                .execute()
-            )
+                (
+                    supabase.table("source_criterion_exclusions")
+                    .delete()
+                    .eq("source_id", source_id)
+                    .execute()
+                )
 
-            supabase.table("sources").delete().eq("id", source_id).execute()
+                supabase.table("sources").delete().eq("id", source_id).execute()
 
             try:
                 compute_brand_score_v2(p["brand_id"])
@@ -97,37 +99,38 @@ async def approve_source_proposal(
 
     p = prop_res.data
 
-  tier = detect_tier(p.get("publisher", ""))
+    tier = detect_tier(p.get("publisher", ""))
 
-# Categorie: quella principale + eventuali extra passate dall'admin
-main_category = p["category_key"]
-extra_categories = (body.extra_categories or []) if body else []
-all_categories = [main_category] + [c for c in extra_categories if c != main_category]
+    # Categorie: quella principale + eventuali extra passate dall'admin
+    main_category = p["category_key"]
+    extra_categories = (body.extra_categories or []) if body else []
+    all_categories = [main_category] + [c for c in extra_categories if c != main_category]
 
-# Inserisci una riga in sources per ogni categoria selezionata
-source_ids_by_category = {}
-for cat in all_categories:
-    inserted = (
-        supabase.table("sources")
-        .insert(
-            {
-                "brand_id": p["brand_id"],
-                "category_key": cat,
-                "url": p["url"],
-                "title": p["title"],
-                "publisher": p["publisher"],
-                "broken": False,
-                "content_missing": False,
-                "tier": tier,
-            }
+    # Inserisci una riga in sources per ogni categoria selezionata
+    source_ids_by_category = {}
+    for cat in all_categories:
+        inserted = (
+            supabase.table("sources")
+            .insert(
+                {
+                    "brand_id": p["brand_id"],
+                    "category_key": cat,
+                    "url": p["url"],
+                    "title": p["title"],
+                    "publisher": p["publisher"],
+                    "broken": False,
+                    "content_missing": False,
+                    "tier": tier,
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
-    if inserted.data:
-        source_ids_by_category[cat] = inserted.data[0]["id"]
+        if inserted.data:
+            source_ids_by_category[cat] = inserted.data[0]["id"]
 
-# source_id principale (per compatibilità con il resto del codice)
-source_id = source_ids_by_category.get(main_category)
+    # source_id principale (per compatibilità con il resto del codice)
+    source_id = source_ids_by_category.get(main_category)
+
     (
         supabase.table("source_proposals")
         .update(
@@ -147,70 +150,67 @@ source_id = source_ids_by_category.get(main_category)
         body.confirmed_judgment if body and body.confirmed_judgment else None
     ) or p.get("ai_judgment")
 
-judgment = (
-    body.confirmed_judgment if body and body.confirmed_judgment else None
-) or p.get("ai_judgment")
+    if judgment and judgment_values and judgment in judgment_values:
+        tier_values = {
+            1: {20: 20, 10: 10, -10: -10, -20: -20},
+            2: {20: 10, 10: 5, -10: -5, -20: -10},
+            3: {20: 2, 10: 1, -10: -1, -20: -2},
+        }
+        base_val = judgment_values[judgment]
+        value = tier_values.get(tier, tier_values[2]).get(base_val, base_val)
+        label_it = judgment_labels_it.get(judgment, judgment) if judgment_labels_it else judgment
 
-if judgment and judgment_values and judgment in judgment_values:
-    tier_values = {
-        1: {20: 20, 10: 10, -10: -10, -20: -20},
-        2: {20: 10, 10: 5, -10: -5, -20: -10},
-        3: {20: 2, 10: 1, -10: -1, -20: -2},
-    }
-    base_val = judgment_values[judgment]
-    value = tier_values.get(tier, tier_values[2]).get(base_val, base_val)
-    label_it = judgment_labels_it.get(judgment, judgment) if judgment_labels_it else judgment
+        for cat, src_id in source_ids_by_category.items():
+            # Cerca il criterio: per la cat principale prova prima con ai_criterion
+            crit_res = None
+            if cat == main_category and p.get("ai_criterion"):
+                crit_res = (
+                    supabase.table("scoring_criteria")
+                    .select("id")
+                    .eq("code", p["ai_criterion"])
+                    .limit(1)
+                    .execute()
+                )
 
-    for cat, src_id in source_ids_by_category.items():
-        # Cerca il criterio per questa categoria (prima con ai_criterion se è la cat principale)
-        crit_res = None
-        if cat == main_category and p.get("ai_criterion"):
-            crit_res = (
-                supabase.table("scoring_criteria")
-                .select("id")
-                .eq("code", p["ai_criterion"])
-                .limit(1)
-                .execute()
-            )
+            if not crit_res or not crit_res.data:
+                crit_res = (
+                    supabase.table("scoring_criteria")
+                    .select("id")
+                    .eq("category_key", cat)
+                    .eq("active", True)
+                    .order("sort_order")
+                    .limit(1)
+                    .execute()
+                )
 
-        if not crit_res or not crit_res.data:
-            crit_res = (
-                supabase.table("scoring_criteria")
-                .select("id")
-                .eq("category_key", cat)
-                .eq("active", True)
-                .order("sort_order")
-                .limit(1)
-                .execute()
-            )
+            if crit_res and crit_res.data:
+                criterion_id = crit_res.data[0]["id"]
+                try:
+                    supabase.table("criterion_source_scores").upsert(
+                        {
+                            "brand_id": p["brand_id"],
+                            "criterion_id": criterion_id,
+                            "source_id": src_id,
+                            "tier": tier,
+                            "value": value,
+                            "label_en": judgment,
+                            "label_it": label_it,
+                            "notes": p.get("ai_rationale", ""),
+                            "status": "draft",
+                        },
+                        on_conflict="brand_id,criterion_id,source_id",
+                    ).execute()
+                except Exception as e:
+                    print(f"criterion_source_scores upsert failed (cat={cat}): {e}")
 
-        if crit_res and crit_res.data:
-            criterion_id = crit_res.data[0]["id"]
-            try:
-                supabase.table("criterion_source_scores").upsert(
-                    {
-                        "brand_id": p["brand_id"],
-                        "criterion_id": criterion_id,
-                        "source_id": src_id,
-                        "tier": tier,
-                        "value": value,
-                        "label_en": judgment,
-                        "label_it": label_it,
-                        "notes": p.get("ai_rationale", ""),
-                        "status": "draft",
-                    },
-                    on_conflict="brand_id,criterion_id,source_id",
-                ).execute()
-            except Exception as e:
-                print(f"criterion_source_scores upsert failed (cat={cat}): {e}")
-
-    background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
+        background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
 
     return {
         "message": "Proposal approved.",
         "tier": tier,
         "judgment_saved": bool(judgment and judgment_values and judgment in judgment_values),
     }
+
 
 def reject_source_proposal(proposal_id: int):
     (
@@ -220,6 +220,7 @@ def reject_source_proposal(proposal_id: int):
         .execute()
     )
     return {"message": "Proposal rejected"}
+
 
 def fetch_score_proposals(status: str = "pending"):
     res = (
@@ -234,6 +235,7 @@ def fetch_score_proposals(status: str = "pending"):
         "count": len(res.data or []),
         "proposals": res.data or [],
     }
+
 
 def approve_score_proposal(proposal_id: int):
     prop_res = (
@@ -311,6 +313,7 @@ def approve_score_proposal(proposal_id: int):
         "category": p["category_key"],
         "category_score": category_score,
     }
+
 
 def reject_score_proposal(proposal_id: int):
     (
