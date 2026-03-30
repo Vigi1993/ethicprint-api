@@ -126,7 +126,7 @@ async def create_source_proposal(data, background_tasks):
             {
                 "Brand": brand_name,
                 "Category": data.category_key or "—",
-                "URL": data.url,
+                "URL": safe_url,
                 "Title": data.title or "—",
                 "Publisher": data.publisher or "—",
                 "Summary": data.summary or "—",
