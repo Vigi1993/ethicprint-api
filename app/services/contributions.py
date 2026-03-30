@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from app.integrations.supabase_client import supabase
 from app.services.notifications import notify_contribution
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
+from app.services.email import send_admin_notification
 
 
 async def create_brand_proposal(data, background_tasks):
@@ -143,14 +144,29 @@ async def create_error_report(data, background_tasks):
 
         new_id = res.data[0]["id"] if res.data else None
 
+  proposal_payload = {
+            "id": new_id,
+            "brand_id": data.brand_id,
+            "brand_name": brand_name,
+            "category_key": data.category_key,
+            "url": data.url,
+            "title": data.title or "",
+            "publisher": data.publisher or "",
+            "summary": data.summary or "",
+            "submitter": data.submitter or "",
+        }
+
+        background_tasks.add_task(send_admin_notification, proposal_payload)
+
         background_tasks.add_task(
             notify_contribution,
-            "error",
+            "source",
             {
                 "Brand": brand_name,
                 "Category": data.category_key or "—",
-                "Description": data.description.strip(),
-                "Source URL": data.source_url or "—",
+                "URL": data.url,
+                "Title": data.title or "—",
+                "Publisher": data.publisher or "—",
                 "Submitted by": data.submitter or "anonymous",
             },
         )
