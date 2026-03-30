@@ -5,7 +5,7 @@ import httpx
 
 
 async def notify_contribution(type: str, data: dict):
-    resend_key = os.getenv("RESEND_KEY")
+    resend_key = os.getenv("RESEND_API_KEY")
     notify_email = os.getenv("NOTIFY_EMAIL")
 
     if not resend_key or not notify_email:
