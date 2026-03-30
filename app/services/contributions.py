@@ -3,7 +3,6 @@ from fastapi import HTTPException
 from app.integrations.supabase_client import supabase
 from app.services.notifications import notify_contribution
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
-from app.services.email import send_admin_notification
 
 
 async def create_brand_proposal(data, background_tasks):
@@ -45,6 +44,7 @@ async def create_brand_proposal(data, background_tasks):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 async def create_source_proposal(data, background_tasks):
     if not data.url or not data.url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid URL")
@@ -73,22 +73,22 @@ async def create_source_proposal(data, background_tasks):
         raise HTTPException(status_code=409, detail="Source already exists or proposed")
 
     try:
-        res = (
-            supabase.table("source_proposals")
-            .insert(
-                {
-                    "brand_id": data.brand_id,
-                    "category_key": data.category_key,
-                    "url": data.url,
-                    "title": data.title,
-                    "publisher": data.publisher or "",
-                    "summary": data.summary or "",
-                    "status": "pending",
-                    "job_type": "new",
-                }
-            )
-            .execute()
-        )
+        insert_payload = {
+            "brand_id": data.brand_id,
+            "category_key": data.category_key,
+            "url": data.url,
+            "title": data.title,
+            "publisher": data.publisher or "",
+            "summary": data.summary or "",
+            "status": "pending",
+            "job_type": "new",
+        }
+
+        # Aggiungi questa riga solo se la colonna submitter esiste davvero in source_proposals
+        if hasattr(data, "submitter"):
+            insert_payload["submitter"] = data.submitter
+
+        res = supabase.table("source_proposals").insert(insert_payload).execute()
 
         new_id = res.data[0]["id"] if res.data else None
 
@@ -101,7 +101,8 @@ async def create_source_proposal(data, background_tasks):
                 "URL": data.url,
                 "Title": data.title or "—",
                 "Publisher": data.publisher or "—",
-                "Submitted by": data.submitter or "anonymous",
+                "Summary": data.summary or "—",
+                "Submitted by": getattr(data, "submitter", None) or "anonymous",
             },
         )
 
@@ -109,6 +110,7 @@ async def create_source_proposal(data, background_tasks):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 async def create_error_report(data, background_tasks):
     if not data.description or len(data.description.strip()) < 10:
@@ -144,29 +146,14 @@ async def create_error_report(data, background_tasks):
 
         new_id = res.data[0]["id"] if res.data else None
 
-  proposal_payload = {
-            "id": new_id,
-            "brand_id": data.brand_id,
-            "brand_name": brand_name,
-            "category_key": data.category_key,
-            "url": data.url,
-            "title": data.title or "",
-            "publisher": data.publisher or "",
-            "summary": data.summary or "",
-            "submitter": data.submitter or "",
-        }
-
-        background_tasks.add_task(send_admin_notification, proposal_payload)
-
         background_tasks.add_task(
             notify_contribution,
-            "source",
+            "error",
             {
                 "Brand": brand_name,
                 "Category": data.category_key or "—",
-                "URL": data.url,
-                "Title": data.title or "—",
-                "Publisher": data.publisher or "—",
+                "Description": data.description.strip(),
+                "Source URL": data.source_url or "—",
                 "Submitted by": data.submitter or "anonymous",
             },
         )
@@ -175,6 +162,7 @@ async def create_error_report(data, background_tasks):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 def fetch_brands_for_contribute(lang: str = "en"):
     lang = lang if lang in SUPPORTED_LANGS else DEFAULT_LANG
@@ -200,6 +188,7 @@ def fetch_brands_for_contribute(lang: str = "en"):
         }
         for b in brands
     ]
+
 
 def fetch_contributions_pending():
     brand_props = (
@@ -231,22 +220,20 @@ def fetch_contributions_pending():
         },
     }
 
+
 def resolve_brand_proposal(proposal_id: int, status: str = "approved"):
     if status not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be approved or rejected")
 
-    supabase.table("brand_proposals").update(
-        {"status": status}
-    ).eq("id", proposal_id).execute()
+    supabase.table("brand_proposals").update({"status": status}).eq("id", proposal_id).execute()
 
     return {"ok": True}
+
 
 def resolve_error_report(report_id: int, status: str = "resolved"):
     if status not in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be resolved or rejected")
 
-    supabase.table("error_reports").update(
-        {"status": status}
-    ).eq("id", report_id).execute()
+    supabase.table("error_reports").update({"status": status}).eq("id", report_id).execute()
 
     return {"ok": True}
