@@ -30,6 +30,7 @@ class ErrorReportIn(BaseModel):
 
 class ApproveProposalBody(BaseModel):
     confirmed_judgment: Optional[str] = None
+    extra_categories: Optional[list[str]] = None
 
 
 class CriterionSourceScoreIn(BaseModel):
