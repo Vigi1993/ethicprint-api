@@ -4,7 +4,36 @@ from app.integrations.supabase_client import supabase
 from app.services.notifications import notify_contribution
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
 
+from urllib.parse import urlparse
 
+
+def validate_public_url(raw_url: str) -> str:
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="URL required")
+
+    url = raw_url.strip()
+    if len(url) > 2000:
+        raise HTTPException(status_code=400, detail="URL too long")
+
+    parsed = urlparse(url)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="Invalid URL scheme")
+
+    if not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid URL host")
+
+    host = (parsed.hostname or "").lower()
+
+    blocked_hosts = {"localhost", "127.0.0.1", "::1"}
+    if host in blocked_hosts:
+        raise HTTPException(status_code=400, detail="Local URLs are not allowed")
+
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="URLs with embedded credentials are not allowed")
+
+    return url
+    
 async def create_brand_proposal(data, background_tasks):
     if not data.name or len(data.name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Brand name too short")
@@ -46,8 +75,7 @@ async def create_brand_proposal(data, background_tasks):
 
 
 async def create_source_proposal(data, background_tasks):
-    if not data.url or not data.url.startswith("http"):
-        raise HTTPException(status_code=400, detail="Invalid URL")
+    safe_url = validate_public_url(data.url)
 
     brand_res = (
         supabase.table("brands")
@@ -61,11 +89,11 @@ async def create_source_proposal(data, background_tasks):
 
     brand_name = brand_res.data[0].get("name", str(data.brand_id))
 
-    existing = supabase.table("sources").select("id").eq("url", data.url).execute()
+   existing = supabase.table("sources").select("id").eq("url", safe_url).execute()
     existing_prop = (
         supabase.table("source_proposals")
         .select("id")
-        .eq("url", data.url)
+        .eq("url", safe_url)
         .execute()
     )
 
@@ -76,7 +104,7 @@ async def create_source_proposal(data, background_tasks):
         insert_payload = {
             "brand_id": data.brand_id,
             "category_key": data.category_key,
-            "url": data.url,
+            "url": safe_url,
             "title": data.title,
             "publisher": data.publisher or "",
             "summary": data.summary or "",
