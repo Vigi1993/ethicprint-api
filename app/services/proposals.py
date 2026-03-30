@@ -97,14 +97,22 @@ async def approve_source_proposal(
 
     p = prop_res.data
 
-    tier = detect_tier(p.get("publisher", ""))
+  tier = detect_tier(p.get("publisher", ""))
 
-    new_source = (
+# Categorie: quella principale + eventuali extra passate dall'admin
+main_category = p["category_key"]
+extra_categories = (body.extra_categories or []) if body else []
+all_categories = [main_category] + [c for c in extra_categories if c != main_category]
+
+# Inserisci una riga in sources per ogni categoria selezionata
+source_ids_by_category = {}
+for cat in all_categories:
+    inserted = (
         supabase.table("sources")
         .insert(
             {
                 "brand_id": p["brand_id"],
-                "category_key": p["category_key"],
+                "category_key": cat,
                 "url": p["url"],
                 "title": p["title"],
                 "publisher": p["publisher"],
@@ -115,8 +123,11 @@ async def approve_source_proposal(
         )
         .execute()
     )
-    source_id = new_source.data[0]["id"] if new_source.data else None
+    if inserted.data:
+        source_ids_by_category[cat] = inserted.data[0]["id"]
 
+# source_id principale (per compatibilità con il resto del codice)
+source_id = source_ids_by_category.get(main_category)
     (
         supabase.table("source_proposals")
         .update(
@@ -136,24 +147,28 @@ async def approve_source_proposal(
         body.confirmed_judgment if body and body.confirmed_judgment else None
     ) or p.get("ai_judgment")
 
-    if source_id and judgment and judgment_values and judgment in judgment_values:
-        tier_values = {
-            1: {20: 20, 10: 10, -10: -10, -20: -20},
-            2: {20: 10, 10: 5, -10: -5, -20: -10},
-            3: {20: 2, 10: 1, -10: -1, -20: -2},
-        }
+judgment = (
+    body.confirmed_judgment if body and body.confirmed_judgment else None
+) or p.get("ai_judgment")
 
-        base_val = judgment_values[judgment]
-        value = tier_values.get(tier, tier_values[2]).get(base_val, base_val)
+if judgment and judgment_values and judgment in judgment_values:
+    tier_values = {
+        1: {20: 20, 10: 10, -10: -10, -20: -20},
+        2: {20: 10, 10: 5, -10: -5, -20: -10},
+        3: {20: 2, 10: 1, -10: -1, -20: -2},
+    }
+    base_val = judgment_values[judgment]
+    value = tier_values.get(tier, tier_values[2]).get(base_val, base_val)
+    label_it = judgment_labels_it.get(judgment, judgment) if judgment_labels_it else judgment
 
-        criterion_code = p.get("ai_criterion", "")
+    for cat, src_id in source_ids_by_category.items():
+        # Cerca il criterio per questa categoria (prima con ai_criterion se è la cat principale)
         crit_res = None
-
-        if criterion_code:
+        if cat == main_category and p.get("ai_criterion"):
             crit_res = (
                 supabase.table("scoring_criteria")
                 .select("id")
-                .eq("code", criterion_code)
+                .eq("code", p["ai_criterion"])
                 .limit(1)
                 .execute()
             )
@@ -162,7 +177,7 @@ async def approve_source_proposal(
             crit_res = (
                 supabase.table("scoring_criteria")
                 .select("id")
-                .eq("category_key", p["category_key"])
+                .eq("category_key", cat)
                 .eq("active", True)
                 .order("sort_order")
                 .limit(1)
@@ -171,14 +186,12 @@ async def approve_source_proposal(
 
         if crit_res and crit_res.data:
             criterion_id = crit_res.data[0]["id"]
-            label_it = judgment_labels_it.get(judgment, judgment) if judgment_labels_it else judgment
-
             try:
                 supabase.table("criterion_source_scores").upsert(
                     {
                         "brand_id": p["brand_id"],
                         "criterion_id": criterion_id,
-                        "source_id": source_id,
+                        "source_id": src_id,
                         "tier": tier,
                         "value": value,
                         "label_en": judgment,
@@ -188,10 +201,10 @@ async def approve_source_proposal(
                     },
                     on_conflict="brand_id,criterion_id,source_id",
                 ).execute()
-
-                background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
             except Exception as e:
-                print(f"criterion_source_scores upsert failed: {e}")
+                print(f"criterion_source_scores upsert failed (cat={cat}): {e}")
+
+    background_tasks.add_task(compute_brand_score_v2, p["brand_id"])
 
     return {
         "message": "Proposal approved.",
