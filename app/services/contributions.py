@@ -1,10 +1,10 @@
+from urllib.parse import urlparse
+
 from fastapi import HTTPException
 
 from app.integrations.supabase_client import supabase
 from app.services.notifications import notify_contribution
 from app.core.constants import SUPPORTED_LANGS, DEFAULT_LANG
-
-from urllib.parse import urlparse
 
 
 def validate_public_url(raw_url: str) -> str:
@@ -30,10 +30,14 @@ def validate_public_url(raw_url: str) -> str:
         raise HTTPException(status_code=400, detail="Local URLs are not allowed")
 
     if parsed.username or parsed.password:
-        raise HTTPException(status_code=400, detail="URLs with embedded credentials are not allowed")
+        raise HTTPException(
+            status_code=400,
+            detail="URLs with embedded credentials are not allowed",
+        )
 
     return url
-    
+
+
 async def create_brand_proposal(data, background_tasks):
     if not data.name or len(data.name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Brand name too short")
@@ -77,6 +81,9 @@ async def create_brand_proposal(data, background_tasks):
 async def create_source_proposal(data, background_tasks):
     safe_url = validate_public_url(data.url)
 
+    if getattr(data, "honeypot", None):
+        raise HTTPException(status_code=400, detail="Invalid submission")
+
     brand_res = (
         supabase.table("brands")
         .select("id, name")
@@ -89,7 +96,7 @@ async def create_source_proposal(data, background_tasks):
 
     brand_name = brand_res.data[0].get("name", str(data.brand_id))
 
-   existing = supabase.table("sources").select("id").eq("url", safe_url).execute()
+    existing = supabase.table("sources").select("id").eq("url", safe_url).execute()
     existing_prop = (
         supabase.table("source_proposals")
         .select("id")
@@ -112,7 +119,7 @@ async def create_source_proposal(data, background_tasks):
             "job_type": "new",
         }
 
-        # Aggiungi questa riga solo se la colonna submitter esiste davvero in source_proposals
+        # Aggiungi submitter solo se la colonna esiste davvero in source_proposals
         if hasattr(data, "submitter"):
             insert_payload["submitter"] = data.submitter
 
