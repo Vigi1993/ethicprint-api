@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 
 from app.services.source_maintenance import (
+    fetch_source_issues,
     find_source_replacement,
     create_replacement_proposal,
     mark_source_resolved,
@@ -11,7 +12,10 @@ from app.models.schemas import ExclusionIn
 
 router = APIRouter(tags=["source-maintenance"])
 
-
+@router.get("/sources/issues")
+def get_source_issues():
+    return fetch_source_issues()
+    
 @router.post("/sources/{source_id}/find-replacement")
 async def find_replacement(source_id: int):
     return await find_source_replacement(source_id)
