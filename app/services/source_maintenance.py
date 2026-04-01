@@ -218,3 +218,24 @@ def remove_source_exclusion(source_id: int, criterion_id: int, brand_id: int):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def fetch_source_issues():
+    res = (
+        supabase.table("sources")
+        .select(
+            "id, url, title, publisher, brand_id, category_key, broken, content_missing, last_checked, checker_ignored"
+        )
+        .or_("broken.eq.true,content_missing.eq.true")
+        .order("last_checked", desc=True)
+        .execute()
+    )
+
+    issues = res.data or []
+
+    # Evita problemi con NULL / false / true
+    issues = [s for s in issues if not s.get("checker_ignored")]
+
+    return {
+        "count": len(issues),
+        "issues": issues,
+    }
