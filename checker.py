@@ -1,12 +1,9 @@
 """
 EthicPrint — Daily Source Checker
 1. Verifica tutte le fonti: broken? contenuto mancante?
-2. Per le fonti rotte cerca sostituti via Brave Search + Claude Haiku
-3. Salva proposte in source_proposals per revisione manuale
-4. Notifica via email se ci sono problemi o nuove proposte
+4. Notifica via email se ci sono problemi
 
 Gira ogni giorno alle 8:00 UTC.
-MAI modifica automatica — tutto richiede approvazione manuale.
 """
 
 import os
@@ -201,7 +198,15 @@ async def send_notification(stats: dict):
         print("⚠ RESEND_API_KEY or NOTIFY_EMAIL not set — skipping notification")
         return
 
-    issues = supabase.table("sources").select("id,url,title,publisher,broken,content_missing,brand_id")        .or_("broken.eq.true,content_missing.eq.true").execute().data or []
+   issues = (
+    supabase.table("sources")
+    .select("id,url,title,publisher,broken,content_missing,brand_id")
+    .or_("broken.eq.true,content_missing.eq.true")
+    .neq("checker_ignored", True)
+    .execute()
+    .data
+    or []
+    )
     proposals = supabase.table("source_proposals").select("id,url,title,publisher,brand_id,job_type")        .eq("status","pending").execute().data or []
 
     if not issues and not proposals:
