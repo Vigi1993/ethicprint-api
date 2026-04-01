@@ -245,7 +245,12 @@ async def run_checker():
     print(f"{'='*50}\n")
 
     # Carica tutte le fonti con info brand
-    sources_res = supabase.table("sources").select("id, url, title, publisher, published_at, category_key, brand_id, brands(id, name)").execute()
+    sources_res = (
+    supabase.table("sources")
+    .select("id, url, title, publisher, published_at, category_key, brand_id, checker_ignored, brands(id, name)")
+    .neq("checker_ignored", True)
+    .execute()
+    )
     sources = sources_res.data or []
     print(f"Found {len(sources)} sources\n")
 
@@ -281,14 +286,6 @@ async def run_checker():
                 print(f"  ✗ Error on source {source.get('id')}: {e}")
                 stats["errors"] += 1
 
-    # Cerca sostituti per le fonti rotte
-    if broken_sources and BRAVE_KEY:
-        print(f"\n--- Searching replacements for {len(broken_sources)} broken sources ---\n")
-        for source in broken_sources:
-            brand = source.get("brands") or {}
-            if brand:
-                await find_replacement(brand, source)
-            await asyncio.sleep(2)
 
     print(f"\n{'='*50}")
     print(f"DONE — ✓ {stats['ok']} OK · ✗ {stats['broken']} broken · ⚠ {stats['content_missing']} missing · 🚫 {stats['blocked']} blocked · {stats['errors']} errors")
